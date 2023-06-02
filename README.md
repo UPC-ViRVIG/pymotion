@@ -259,7 +259,8 @@ conn.close()
 
 ## Roadmap
 
-This repository is authored and maintained by [Jose Luis Ponton](https://github.com/JLPM22) as part of his Ph.D. Features will be added when new operations or rotation representations are needed in the development of research projects. Here it is a list of possible features and improvements for the future:
+This repository is authored and maintained by [Jose Luis Ponton](https://github.com/JLPM22) as part of his Ph.D. 
+Features will be added when new operations or rotation representations are needed in the development of research projects. Here it is a list of possible features and improvements for the future:
 
 - Extend documentation and add examples in the description of each function.
 - Include new animation importers such as FBX
