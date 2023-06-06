@@ -35,7 +35,6 @@ def from_root_dual_quat(dq: torch.Tensor, parents: torch.Tensor):
     rotations : torch.Tensor[..., n_joints, 4]
     translations : torch.Tensor[..., n_joints, 3]
     """
-    device = dq.device
     n_joints = dq.shape[-2]
     # rotations has shape (..., frames, n_joints, 4)
     # translations has shape (..., frames, n_joints, 3)

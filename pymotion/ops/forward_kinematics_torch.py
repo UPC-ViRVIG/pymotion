@@ -46,8 +46,8 @@ def fk(
         if i == 0:
             continue
         mat[..., i, :, :] = torch.matmul(
-            mat[..., parent, :, :],
-            mat[..., i, :, :],
+            mat[..., parent, :, :].clone(),
+            mat[..., i, :, :].clone(),
         )
     positions = mat[..., :3, 3]
     rotmats = mat[..., :3, :3]

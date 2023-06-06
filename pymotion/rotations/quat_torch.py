@@ -368,6 +368,9 @@ def mul(q0: torch.Tensor, q1: torch.Tensor) -> torch.Tensor:
     -------
     quat : torch.Tensor[..., [w,x,y,z]]
     """
+
+    q0 = q0.clone()
+    q1 = q1.clone()
     w0, x0, y0, z0 = q0[..., 0:1], q0[..., 1:2], q0[..., 2:3], q0[..., 3:4]
     w1, x1, y1, z1 = q1[..., 0:1], q1[..., 1:2], q1[..., 2:3], q1[..., 3:4]
     # (w0,v0)(w1,v1) = (w0w1 - v0·v1, w0v1 + w1v0 + v0 x v1)
