@@ -390,3 +390,128 @@ class TestQuat:
         t2 = np.linalg.norm(qs_norm_t.numpy(), axis=-1)
         assert_allclose(t1, np.ones_like(t1), atol=self.low_atol)
         assert_allclose(t2, np.ones_like(t2), atol=self.low_atol)
+
+    def test_slerp(self):
+        axis_1 = np.array(
+            [
+                [0, 0, 1],
+                [0, 0, 1],
+                [0, 0, 1],
+            ]
+        )
+        axis_2 = np.array(
+            [
+                [0, 0, 1],
+                [1, 0, 0],
+                [0, 1, 0],
+            ]
+        )
+        angle_1 = np.array(
+            [
+                [0],
+                [np.pi / 2],
+                [np.pi],
+            ]
+        )
+        angle_2 = np.array(
+            [
+                [np.pi / 2],
+                [0],
+                [np.pi],
+            ]
+        )
+        t = np.array(
+            [
+                [0],
+                [0.5],
+                [1],
+            ]
+        )
+        t_2 = np.array(
+            [
+                [-1],
+                [2],
+                [0.25],
+            ]
+        )
+        t_3 = 0.75
+        q1 = quat.from_angle_axis(angle_1, axis_1)
+        q2 = quat.from_angle_axis(angle_2, axis_2)
+        gt = np.array([[1, 0, 0, 0], [0.92387953, 0, 0, 0.38268343], [0, 0, 1, 0]])
+        gt_2 = np.array(
+            [
+                [0.70710678, 0, 0, -0.70710678],
+                [0.70710678, 0, 0, -0.70710678],
+                [0, 0, 0.38268343, 0.92387953],
+            ]
+        )
+        gt_3 = np.array(
+            [
+                [0.83146961, 0, 0, 0.5555702],
+                [0.98078528, 0, 0, 0.1950903],
+                [0, 0, 0.9238795, 0.3826834],
+            ]
+        )
+        assert_allclose(quat.slerp(q1, q2, t), gt, atol=self.atol)
+        assert_allclose(
+            quat_torch.slerp(
+                torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t)
+            ),
+            torch.from_numpy(gt),
+            atol=self.atol,
+        )
+        assert_allclose(quat.slerp(q1, q2, t_2), gt_2, atol=self.atol)
+        assert_allclose(
+            quat_torch.slerp(
+                torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t_2)
+            ),
+            torch.from_numpy(gt_2),
+            atol=self.atol,
+        )
+        assert_allclose(quat.slerp(q1, q2, t_3), gt_3, atol=self.atol)
+        assert_allclose(
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), t_3),
+            torch.from_numpy(gt_3),
+            atol=self.atol,
+        )
+        assert_allclose(
+            quat.slerp(
+                q1[np.newaxis, np.newaxis, ...],
+                q2[np.newaxis, np.newaxis, ...],
+                t_2[np.newaxis, np.newaxis, ...],
+            ),
+            gt_2[np.newaxis, np.newaxis, ...],
+            atol=self.atol,
+        )
+        assert_allclose(
+            quat_torch.slerp(
+                torch.from_numpy(q1[np.newaxis, np.newaxis, ...]),
+                torch.from_numpy(q2[np.newaxis, np.newaxis, ...]),
+                torch.from_numpy(t_2[np.newaxis, np.newaxis, ...]),
+            ),
+            torch.from_numpy(gt_2[np.newaxis, np.newaxis, ...]),
+            atol=self.atol,
+        )
+
+        q1 = quat.from_angle_axis(
+            np.array([np.pi / 2]), np.array([0, 1, 1]) / np.sqrt(2)
+        )
+        q2 = -q1.copy()
+        gt = q1
+        assert_allclose(quat.slerp(q1, q2, 0.5), gt, atol=self.low_atol)
+        assert_allclose(
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), 0.5),
+            torch.from_numpy(gt),
+            atol=self.low_atol,
+        )
+        gt = np.array([0.5, 0.0, 0.353553, 0.353553])
+        assert_allclose(
+            quat.slerp(q1, q2, 0.25, shortest=False), gt, atol=self.low_atol
+        )
+        assert_allclose(
+            quat_torch.slerp(
+                torch.from_numpy(q1), torch.from_numpy(q2), 0.25, shortest=False
+            ),
+            torch.from_numpy(gt),
+            atol=self.low_atol,
+        )

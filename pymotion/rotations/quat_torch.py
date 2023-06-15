@@ -486,6 +486,50 @@ def unroll(quaternions: torch.Tensor, dim: int) -> torch.Tensor:
     return r
 
 
+def slerp(
+    q0: torch.Tensor, q1: torch.Tensor, t: float or torch.Tensor, shortest: bool = True
+) -> torch.Tensor:
+    """
+    Perform spherical linear interpolation (SLERP) between two unit quaternions.
+
+    Parameters
+    ----------
+    q0 : torch.Tensor[..., [w,x,y,z]]
+    q1 : torch.Tensor[..., [w,x,y,z]]
+    t : float or torch.Tensor[..., [t]]
+        Interpolation parameter between 0 and 1. At t=0, returns q0 and at t=1, returns q1.
+    shorthest : bool
+        Ensure the shorthest path between quaternions.
+
+    Returns
+    -------
+    quat : torch.Tensor[..., [w,x,y,z]]
+    """
+    # Compute the cosine of the angle between the two vectors.
+    dot = torch.sum(q0 * q1, dim=-1, keepdim=True)
+
+    # If the dot product is negative, the quaternions
+    # have opposite handed-ness and slerp won't take
+    # the shorter path. Fix by reversing one quaternion.
+    if shortest:
+        q1 = torch.where(dot < 0, -q1, q1)
+        dot = torch.where(dot < 0, -dot, dot)
+
+    # Clamp to prevent instability at near 180° angle
+    dot = torch.clip(dot, -1, 1)
+
+    # Compute the quaternion of the angle between the quaternions
+    theta_0 = torch.arccos(dot)  # theta_0 = angle between input vectors
+    theta = theta_0 * t  # theta = angle between q0 vector and result
+
+    q2 = q1 - q0 * dot
+    q2 /= torch.linalg.norm(
+        q2 + 0.000001, dim=-1, keepdim=True
+    )  # {q0, q2} is now an orthonormal basis
+
+    return torch.cos(theta) * q0 + torch.sin(theta) * q2
+
+
 def _fast_cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """
     Fast cross of two vectors

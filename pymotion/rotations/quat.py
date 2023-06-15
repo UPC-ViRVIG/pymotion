@@ -457,6 +457,49 @@ def unroll(quaternions: np.array, axis: int) -> np.array:
     return r
 
 
+def slerp(
+    q0: np.array, q1: np.array, t: float or np.array, shortest: bool = True
+) -> np.array:
+    """
+    Perform spherical linear interpolation (SLERP) between two unit quaternions.
+
+    Parameters
+    ----------
+    q0 : np.array[..., [w,x,y,z]]
+    q1 : np.array[..., [w,x,y,z]]
+    t : float or np.array[..., [t]]
+        Interpolation parameter between 0 and 1. At t=0, returns q0 and at t=1, returns q1.
+    shorthest : bool
+        Ensure the shorthest path between quaternions.
+
+    Returns
+    -------
+    quat : np.array[..., [w,x,y,z]]
+    """
+    # Compute the cosine of the angle between the two vectors.
+    dot = np.sum(q0 * q1, axis=-1, keepdims=True)
+
+    # If the dot product is negative, the quaternions
+    # have opposite handed-ness and slerp won't take
+    # the shorter path. Fix by reversing one quaternion.
+    q1 = np.where(shortest and dot < 0, -q1, q1)
+    dot = np.where(shortest and dot < 0, -dot, dot)
+
+    # Clamp to prevent instability at near 180° angle
+    dot = np.clip(dot, -1, 1)
+
+    # Compute the quaternion of the angle between the quaternions
+    theta_0 = np.arccos(dot)  # theta_0 = angle between input vectors
+    theta = theta_0 * t  # theta = angle between q0 vector and result
+
+    q2 = q1 - q0 * dot
+    q2 /= np.linalg.norm(
+        q2 + 0.000001, axis=-1, keepdims=True
+    )  # {q0, q2} is now an orthonormal basis
+
+    return np.cos(theta) * q0 + np.sin(theta) * q2
+
+
 def _fast_cross(a: np.array, b: np.array) -> np.array:
     """
     Fast cross of two vectors
