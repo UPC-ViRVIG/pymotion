@@ -505,6 +505,7 @@ def slerp(
     -------
     quat : torch.Tensor[..., [w,x,y,z]]
     """
+
     # Compute the cosine of the angle between the two vectors.
     dot = torch.sum(q0 * q1, dim=-1, keepdim=True)
 

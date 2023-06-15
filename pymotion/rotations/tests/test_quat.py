@@ -353,7 +353,6 @@ class TestQuat:
         q = quat.from_scaled_angle_axis(axis)
         q_t = quat_torch.from_scaled_angle_axis(axis_t)
         q_id = np.tile(np.array([1, 0, 0, 0]), (1, 1, 1, n, 1))
-        q_id_t = torch.from_numpy(q_id)
         # compute inverse
         q_inv = quat.inverse(q)
         q_inv_t = quat_torch.inverse(q_t)
@@ -365,7 +364,7 @@ class TestQuat:
         assert_allclose(q_t, q_inv_inv_t.numpy(), atol=self.atol)
         # check if multiply inverse is identity
         assert_allclose(quat.mul(q, q_inv), q_id, atol=self.atol)
-        assert_allclose(quat_torch.mul(q_t, q_inv_t), q_id_t, atol=self.atol)
+        assert_allclose(quat_torch.mul(q_t, q_inv_t).numpy(), q_id, atol=self.atol)
 
     def test_normalize(self):
         n = 100
@@ -456,22 +455,22 @@ class TestQuat:
         assert_allclose(
             quat_torch.slerp(
                 torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t)
-            ),
-            torch.from_numpy(gt),
+            ).numpy(),
+            gt,
             atol=self.atol,
         )
         assert_allclose(quat.slerp(q1, q2, t_2), gt_2, atol=self.atol)
         assert_allclose(
             quat_torch.slerp(
                 torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t_2)
-            ),
-            torch.from_numpy(gt_2),
+            ).numpy(),
+            gt_2,
             atol=self.atol,
         )
         assert_allclose(quat.slerp(q1, q2, t_3), gt_3, atol=self.atol)
         assert_allclose(
-            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), t_3),
-            torch.from_numpy(gt_3),
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), t_3).numpy(),
+            gt_3,
             atol=self.atol,
         )
         assert_allclose(
@@ -488,8 +487,8 @@ class TestQuat:
                 torch.from_numpy(q1[np.newaxis, np.newaxis, ...]),
                 torch.from_numpy(q2[np.newaxis, np.newaxis, ...]),
                 torch.from_numpy(t_2[np.newaxis, np.newaxis, ...]),
-            ),
-            torch.from_numpy(gt_2[np.newaxis, np.newaxis, ...]),
+            ).numpy(),
+            gt_2[np.newaxis, np.newaxis, ...],
             atol=self.atol,
         )
 
@@ -500,8 +499,8 @@ class TestQuat:
         gt = q1
         assert_allclose(quat.slerp(q1, q2, 0.5), gt, atol=self.low_atol)
         assert_allclose(
-            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), 0.5),
-            torch.from_numpy(gt),
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), 0.5).numpy(),
+            gt,
             atol=self.low_atol,
         )
         gt = np.array([0.5, 0.0, 0.353553, 0.353553])
@@ -511,7 +510,7 @@ class TestQuat:
         assert_allclose(
             quat_torch.slerp(
                 torch.from_numpy(q1), torch.from_numpy(q2), 0.25, shortest=False
-            ),
-            torch.from_numpy(gt),
+            ).numpy(),
+            gt,
             atol=self.low_atol,
         )
