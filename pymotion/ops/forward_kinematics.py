@@ -13,7 +13,7 @@ def fk(
     -----------
         rot: np.array[..., n_joints, 4]
         global_pos: np.array[..., 3]
-        offsets: np.array[n_joints, 3]
+        offsets: np.array[..., n_joints, 3] or np.array[n_joints, 3]
         parents: np.array[n_joints]
 
     Returns

@@ -1,5 +1,6 @@
 import numpy as np
 import pymotion.rotations.quat as quat
+import copy
 
 
 class BVH:
@@ -9,7 +10,18 @@ class BVH:
         self.bvh_pos_map_num = {"Xposition": 0, "Yposition": 1, "Zposition": 2}
         self.inv_bvh_rot_map = {v: k for k, v in self.bvh_rot_map.items()}
 
-    def load(self, filename: str) -> dict:
+    def copy(self, bvh):
+        """
+        Deep copies a BVH object.
+
+        Parameters
+        ----------
+        bvh : BVH
+            BVH object to copy.
+        """
+        self.data = copy.deepcopy(bvh.data)
+
+    def load(self, filename: str):
         """
         Reads a BVH file and returns a dictionary with the data.
 
@@ -18,7 +30,7 @@ class BVH:
         filename : str
             path to the file.
 
-        Returns
+        Results
         ------
         self.data : dict
             dictionary with the data.
@@ -26,6 +38,10 @@ class BVH:
                 ith-element contain the name of ith-joint.
             ["offsets"] : np.array[n_joints, 3]
                 ith-element contain the offset of ith-joint wrt. its parent joint.
+            ["end_sites"] : np.array[n_end_sites, 3]
+                ith-element contain the offset of ith-end-site wrt. its parent joint.
+            ["end_sites_parents"] : list[int]
+                ith-element contain the joint parent of the ith end-site.
             ["parents"] : list[int]
                 ith-element contain the parent of the ith joint.
             ["rot_order"] : np.array[n_joints, 3]
@@ -41,6 +57,8 @@ class BVH:
 
         names = []
         offsets = []
+        end_sites = []
+        end_sites_parents = []
         parents = []
         position_order = []
         rot_order = []
@@ -73,15 +91,17 @@ class BVH:
                         current = parents[current]
                     continue
 
-                if is_end_site:
-                    continue
-
                 if "End Site" in line:
                     is_end_site = True
+                    end_sites_parents.append(current)
+                    end_sites.append(None)
                     continue
 
                 if "OFFSET" in line:
-                    offsets[current] = [float(x) for x in line.split()[1:4]]
+                    if is_end_site:
+                        end_sites[-1] = [float(x) for x in line.split()[1:4]]
+                    else:
+                        offsets[current] = [float(x) for x in line.split()[1:4]]
                     continue
 
                 if "CHANNELS" in line:
@@ -89,16 +109,10 @@ class BVH:
                     number_channels = int(words[1])
                     channels[current] = number_channels
                     if number_channels == 6:
-                        position_order[current] = [
-                            self.bvh_pos_map_num[x] for x in words[2 : 2 + 3]
-                        ]
-                        rot_order[current] = [
-                            self.bvh_rot_map[x] for x in words[2 + 3 : 2 + 3 + 3]
-                        ]
+                        position_order[current] = [self.bvh_pos_map_num[x] for x in words[2 : 2 + 3]]
+                        rot_order[current] = [self.bvh_rot_map[x] for x in words[2 + 3 : 2 + 3 + 3]]
                     elif number_channels == 3:
-                        rot_order[current] = [
-                            self.bvh_rot_map[x] for x in words[2 : 2 + 3]
-                        ]
+                        rot_order[current] = [self.bvh_rot_map[x] for x in words[2 : 2 + 3]]
                     else:
                         raise Exception("Unknown number of channels")
                     continue
@@ -106,10 +120,9 @@ class BVH:
                 if "Frames" in line:
                     number_frames = int(line.split()[1])
                     offsets = np.array(offsets)
+                    end_sites = np.array(end_sites)
                     rot_order = np.array(rot_order)
-                    positions = np.tile(offsets, (number_frames, 1)).reshape(
-                        number_frames, len(offsets), 3
-                    )
+                    positions = np.tile(offsets, (number_frames, 1)).reshape(number_frames, len(offsets), 3)
                     rotations = np.zeros((number_frames, len(names), 3))
                     continue
 
@@ -134,15 +147,16 @@ class BVH:
         self.data = {
             "names": names,
             "offsets": offsets,
+            "end_sites": end_sites,
+            "end_sites_parents": end_sites_parents,
             "parents": parents,
             "rot_order": rot_order,
             "positions": positions,
             "rotations": rotations,
             "frame_time": frame_time,
         }
-        return self.data
 
-    def save(self, filename: str, data: dict = None) -> None:
+    def save(self, filename: str):
         """
         Saves a BVH file from a dictionary with the data.
 
@@ -158,13 +172,10 @@ class BVH:
             if data == None, then self.data is used.
         """
 
-        if data is None:
-            data = self.data
-
         with open(filename, "w") as f:
             tab = ""
             f.write("%sHIERARCHY\n" % tab)
-            f.write("%sROOT %s\n" % (tab, data["names"][0]))
+            f.write("%sROOT %s\n" % (tab, self.data["names"][0]))
             f.write("%s{\n" % tab)
             tab += "\t"
 
@@ -172,49 +183,49 @@ class BVH:
                 "%sOFFSET %f %f %f\n"
                 % (
                     tab,
-                    data["offsets"][0, 0],
-                    data["offsets"][0, 1],
-                    data["offsets"][0, 2],
+                    self.data["offsets"][0, 0],
+                    self.data["offsets"][0, 1],
+                    self.data["offsets"][0, 2],
                 )
             )
             f.write(
                 "%sCHANNELS 6 Xposition Yposition Zposition %s %s %s \n"
                 % (
                     tab,
-                    self.inv_bvh_rot_map[data["rot_order"][0, 0]],
-                    self.inv_bvh_rot_map[data["rot_order"][0, 1]],
-                    self.inv_bvh_rot_map[data["rot_order"][0, 2]],
+                    self.inv_bvh_rot_map[self.data["rot_order"][0, 0]],
+                    self.inv_bvh_rot_map[self.data["rot_order"][0, 1]],
+                    self.inv_bvh_rot_map[self.data["rot_order"][0, 2]],
                 )
             )
 
             joint_order = [0]
 
-            for i in range(len(data["parents"])):
-                if data["parents"][i] == 0:
-                    tab = self._save_joint(f, data, tab, i, joint_order)
+            for i in range(len(self.data["parents"])):
+                if self.data["parents"][i] == 0:
+                    tab = self._save_joint(f, self.data, tab, i, joint_order)
 
             tab = tab[:-1]
             f.write("%s}\n" % tab)
 
             f.write("%sMOTION\n" % tab)
-            f.write("%sFrames: %d\n" % (tab, data["positions"].shape[0]))
-            f.write("%sFrame Time: %f\n" % (tab, data["frame_time"]))
+            f.write("%sFrames: %d\n" % (tab, self.data["positions"].shape[0]))
+            f.write("%sFrame Time: %f\n" % (tab, self.data["frame_time"]))
 
-            for i in range(data["positions"].shape[0]):
+            for i in range(self.data["positions"].shape[0]):
                 for j in joint_order:
                     if j == 0:  # root
                         f.write(
                             "%f %f %f "
                             % (
-                                data["positions"][i, j, 0],
-                                data["positions"][i, j, 1],
-                                data["positions"][i, j, 2],
+                                self.data["positions"][i, j, 0],
+                                self.data["positions"][i, j, 1],
+                                self.data["positions"][i, j, 2],
                             )
                         )
-                    f.write("%f %f %f " % tuple(data["rotations"][i, j]))
+                    f.write("%f %f %f " % tuple(self.data["rotations"][i, j]))
                 f.write("\n")
 
-    def set_scale(self, scale: float, data: dict = None) -> dict:
+    def set_scale(self, scale: float):
         """
         Sets the scale of the BVH.
 
@@ -222,27 +233,13 @@ class BVH:
         ----------
         scale : float
             scale to apply to the BVH.
-        data : dict
-            dictionary with the data following the
-            returned dict structure from load(...).
-            if data == None, then self.data is used.
-
-        Returns
-        -------
-        data: dict
-            dictionary with the data following the
-            returned dict structure from load(...).
         """
 
-        if data is None:
-            data = self.data
+        self.data["offsets"] *= scale
+        self.data["end_sites"] *= scale
+        self.data["positions"] *= scale
 
-        data["offsets"] *= scale
-        data["positions"] *= scale
-
-        return data
-
-    def set_order_joints(self, order: list[int], data: dict = None) -> dict:
+    def set_order_joints(self, order: list[int]):
         """
         Sets the order of the joints in the .bvh file.
 
@@ -250,38 +247,27 @@ class BVH:
         ----------
         order : list[int]
             for each joint j, order[j] is the new index of the joint j.
-        data : dict
-            dictionary with the data following the
-            returned dict structure from load(...).
-            if data == None, then self.data is used.
 
-        data: dict
-            dictionary with the data following the
-            returned dict structure from load(...).
         """
 
         assert order[0] == 0, "root joint should not change"
         assert len(order) == len(
-            data["names"]
+            self.data["names"]
         ), "order should have the same number of joints as the original bvh file"
-
-        if data is None:
-            data = self.data
 
         reverse_order = [order.index(i) for i in range(len(order))]
 
-        data["names"] = [data["names"][reverse_order[i]] for i in range(len(order))]
-        data["offsets"] = data["offsets"][reverse_order]
-        data["parents"][0] = 0
-        data["parents"] = [
-            order[data["parents"][reverse_order[i]]] for i in range(len(order))
-        ]
-        data["parents"][0] = None
-        data["rot_order"] = data["rot_order"][reverse_order]
-        data["positions"] = data["positions"][:, reverse_order]
-        data["rotations"] = data["rotations"][:, reverse_order]
+        self.data["names"] = [self.data["names"][reverse_order[i]] for i in range(len(order))]
+        self.data["offsets"] = self.data["offsets"][reverse_order]
+        self.data["end_sites_parents"] = [order[j] for j in self.data["end_sites_parents"]]
+        self.data["parents"][0] = 0
+        self.data["parents"] = [order[self.data["parents"][reverse_order[i]]] for i in range(len(order))]
+        self.data["parents"][0] = None
+        self.data["rot_order"] = self.data["rot_order"][reverse_order]
+        self.data["positions"] = self.data["positions"][:, reverse_order]
+        self.data["rotations"] = self.data["rotations"][:, reverse_order]
 
-    def remove_joints(self, delete_joints: list[int], data: dict = None) -> dict:
+    def remove_joints(self, delete_joints: list[int]):
         """
         Removes joints from the .bvh file.
 
@@ -289,55 +275,58 @@ class BVH:
         ----------
         delete_joints : list[int]
             list of joint indices to remove.
-        data : dict
-            dictionary with the data following the
-            returned dict structure from load(...).
-            if data == None, then self.data is used.
-
-        data: dict
-            dictionary with the data following the
-            returned dict structure from load(...).
         """
 
-        if data is None:
-            data = self.data
-
-        keep_joints = [i for i in range(len(data["names"])) if i not in delete_joints]
+        # Identify joints to keep
+        keep_joints = [i for i in range(len(self.data["names"])) if i not in delete_joints]
         new_to_old = dict(enumerate(keep_joints))
         old_to_new = dict((v, k) for k, v in new_to_old.items())
-        rots, pos, parents, offsets = self.get_data()
+
+        # Update transforms for remaining joints
+        rots, pos, parents, offsets, end_sites, end_sites_parents = self.get_data()
         new_rots = rots[:, keep_joints, :]
         new_pos = pos[:, keep_joints, :]
         new_offsets = offsets[keep_joints, :]
         for j in keep_joints:
             while parents[j] not in keep_joints:
                 p = parents[j]
-                new_rots[:, old_to_new[j], :] = quat.mul(
-                    rots[:, p, :], new_rots[:, old_to_new[j], :]
-                )
+                new_rots[:, old_to_new[j], :] = quat.mul(rots[:, p, :], new_rots[:, old_to_new[j], :])
                 new_pos[:, old_to_new[j], :] = (
-                    quat.mul_vec(rots[:, p, :], new_pos[:, old_to_new[j], :])
-                    + pos[:, p, :]
+                    quat.mul_vec(rots[:, p, :], new_pos[:, old_to_new[j], :]) + pos[:, p, :]
                 )
                 new_offsets[old_to_new[j]] = (
                     quat.mul_vec(rots[0, p, :], new_offsets[old_to_new[j]]) + offsets[p]
                 )
                 parents[j] = parents[p]
+
+        # Update parent indices for remaining joints
         new_parents = [0] * len(keep_joints)
         for i, p in enumerate(parents):
             if i in keep_joints:
                 new_parents[old_to_new[i]] = old_to_new[p]
         new_parents[0] = None
+
+        # Update end_sites_parents to reflect the removal of joints
+        updated_end_sites_parents = [
+            old_to_new[es_parent] for es_parent in end_sites_parents if es_parent in old_to_new
+        ]
+        # Remove end sites associated with deleted joints, if necessary
+        valid_end_sites_indices = [
+            i for i, es_parent in enumerate(end_sites_parents) if es_parent not in delete_joints
+        ]
+
+        # Update data
+        self.data["names"] = [self.data["names"][i] for i in keep_joints]
         self.data["positions"] = new_pos
         self.data["rotations"] = np.degrees(
             quat.to_euler(
-                new_rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1))
+                new_rots, order=np.tile(self.data["rot_order"][..., keep_joints, :], (rots.shape[0], 1, 1))
             )
         )
         self.data["parents"] = new_parents
         self.data["offsets"] = new_offsets
-        new_names = [self.data["names"][i] for i in keep_joints]
-        self.data["names"] = new_names
+        self.data["end_sites"] = end_sites[valid_end_sites_indices]
+        self.data["end_sites_parents"] = updated_end_sites_parents
 
     def get_data(self):
         """
@@ -354,13 +343,15 @@ class BVH:
             ith-element contain the parent of the ith joint.
         offsets : np.array[n_joints, 3]
             ith-element contain the offset of ith-joint wrt. its parent joint.
+        end_sites : np.array[n_joints, 3]
+            ith-element contain the offset of ith-end-site wrt. its parent joint.
+        end_sites_parents : list[int]
+            ith-element contain the joint parent of the ith end-site.
         """
         rots = quat.unroll(
             quat.from_euler(
                 np.radians(self.data["rotations"]),
-                order=np.tile(
-                    self.data["rot_order"], (self.data["rotations"].shape[0], 1, 1)
-                ),
+                order=np.tile(self.data["rot_order"], (self.data["rotations"].shape[0], 1, 1)),
             ),
             axis=0,
         )
@@ -369,7 +360,9 @@ class BVH:
         parents = self.data["parents"]
         parents[0] = 0  # BVH sets root as None
         offsets = self.data["offsets"]
-        return rots, pos, np.array(parents), offsets
+        end_sites = self.data["end_sites"]
+        end_sites_parents = self.data["end_sites_parents"]
+        return rots, pos, np.array(parents), offsets, end_sites, end_sites_parents
 
     def set_data(self, rots, pos):
         """
@@ -395,9 +388,7 @@ class BVH:
         ), "load a BVH file first or create a self.data dict with the same structure as the one returned by load(...)"
 
         self.data["rotations"] = np.degrees(
-            quat.to_euler(
-                rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1))
-            )
+            quat.to_euler(rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1)))
         )
         self.data["positions"] = pos
         self.data["parents"][0] = None  # BVH sets root as None
@@ -439,7 +430,11 @@ class BVH:
             f.write("%sEnd Site\n" % tab)
             f.write("%s{\n" % tab)
             tab += "\t"
-            f.write("%sOFFSET %f %f %f\n" % (tab, 0.0, 0.0, 0.0))
+            try:
+                end_site_data = data["end_sites"][data["end_sites_parents"].index(i)]
+            except ValueError:
+                end_site_data = np.zeros(3)
+            f.write("%sOFFSET %f %f %f\n" % (tab, end_site_data[0], end_site_data[1], end_site_data[2]))
             tab = tab[:-1]
             f.write("%s}\n" % tab)
 

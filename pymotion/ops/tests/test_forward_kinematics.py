@@ -42,12 +42,17 @@ class TestFK:
                 [0, 0, 1],
             ]
         ).astype(np.float32)
-        ground_truth_rotmats = np.tile(
-            ground_truth_rotmats, (2, 3, 1, 1)
-        )  # (..., 3, 3)
+        ground_truth_rotmats = np.tile(ground_truth_rotmats, (2, 3, 1, 1))  # (..., 3, 3)
+        positions, rotmats = fk(rot, global_pos, np.tile(offsets, (2, 1, 1)), parents)
         positions, rotmats = fk(rot, global_pos, offsets, parents)
         assert_allclose(positions, ground_truth_pos, atol=self.atol)
         assert_allclose(rotmats, ground_truth_rotmats, atol=self.atol)
+        positions, rotmats = fk_torch(
+            torch.from_numpy(rot),
+            torch.from_numpy(global_pos),
+            torch.from_numpy(np.tile(offsets, (2, 1, 1))),
+            torch.from_numpy(parents),
+        )
         positions, rotmats = fk_torch(
             torch.from_numpy(rot),
             torch.from_numpy(global_pos),

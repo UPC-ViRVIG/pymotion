@@ -17,7 +17,7 @@ def fk(
     -----------
         rot: torch.Tensor[..., n_joints, 4]
         global_pos: torch.Tensor[..., 3]
-        offsets: torch.Tensor[n_joints, 3]
+        offsets: torch.Tensor[..., n_joints, 3] or torch.Tensor[n_joints, 3]
         parents: torch.Tensor[n_joints]
 
     Returns

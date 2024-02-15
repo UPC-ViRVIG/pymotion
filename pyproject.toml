@@ -10,8 +10,8 @@ exclude = ["*test*"]
 
 [project]
 name = "upc-pymotion"
-version = "0.0.1"
-description = "A Python library for working with motion data in numpy or PyTorch."
+version = "0.0.2"
+description = "A Python library for working with motion data in NumPy or PyTorch."
 readme = "README.md"
 authors = [{ name = "Jose Luis Ponton", email = "jose.luis.ponton@upc.edu" }]
 license = { file = "LICENSE" }
@@ -21,7 +21,7 @@ classifiers = [
 ]
 keywords = ["quaternion", "dual quaternion", "rotation matrix", "motion", "blender", "pytorch", "numpy", "forward kinematics", "skeleton"]
 dependencies = [
-    "numpy>=1.21.6",
+    "numpy>=1.20.0",
 ]
 requires-python = ">=3.0"
 

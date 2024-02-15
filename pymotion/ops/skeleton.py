@@ -54,9 +54,7 @@ def from_root_dual_quat(dq: np.array, parents: np.array) -> np.array:
     return translations, rotations
 
 
-def to_root_dual_quat(
-    rotations: np.array, global_pos: np.array, parents: np.array, offsets: np.array
-):
+def to_root_dual_quat(rotations: np.array, global_pos: np.array, parents: np.array, offsets: np.array):
     """
     Convert the skeleton information to root-centered dual quaternions.
 
@@ -88,8 +86,7 @@ def to_root_dual_quat(
         if parent == 0:  # already in root space
             continue
         translations[..., j, :] = (
-            quat.mul_vec(rotations[..., parent, :], translations[..., j, :])
-            + translations[..., parent, :]
+            quat.mul_vec(rotations[..., parent, :], translations[..., j, :]) + translations[..., parent, :]
         )
         rotations[..., j, :] = quat.mul(rotations[..., parent, :], rotations[..., j, :])
     # convert to dual quaternions
