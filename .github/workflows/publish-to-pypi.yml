@@ -99,7 +99,7 @@ jobs:
 
     environment:
       name: testpypi
-      url: https://test.pypi.org/p/pymotion
+      url: https://test.pypi.org/p/upc-pymotion
 
     permissions:
       id-token: write  # IMPORTANT: mandatory for trusted publishing
