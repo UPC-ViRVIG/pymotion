@@ -271,5 +271,4 @@ Features will be added when new operations or rotation representations are neede
 
 ## License
 
-This work is licensed under CC BY-SA 4.0.
-The project and data is available for free, and may be redistributed under these conditions. Please, see the [license](LICENSE) for further details.
+This work is licensed under the MIT license. Please, see the [LICENSE](LICENSE) for further details.
