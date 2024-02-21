@@ -44,7 +44,7 @@ print(bvh.data["names"])
 
 
 # Move root joint to (0, 0, 0)
-local_rotations, local_positions, parents, offsets = bvh.get_data()
+local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
 local_positions[:, 0, :] = np.zeros((local_positions.shape[0], 3))
 bvh.set_data(local_rotations, local_positions)
 
@@ -67,7 +67,7 @@ from pymotion.ops.forward_kinematics import fk
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, local_positions, parents, offsets = bvh.get_data()
+local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
 global_positions = local_positions[:, 0, :]  # root joint
 pos, rotmats = fk(local_rotations, global_positions, offsets, parents)
 ```
@@ -81,7 +81,7 @@ import torch
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, local_positions, parents, offsets = bvh.get_data()
+local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
 global_positions = local_positions[:, 0, :]  # root joint
 pos, rotmats = fk(
     torch.from_numpy(local_rotations),
@@ -151,7 +151,7 @@ import numpy as np
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, local_positions, parents, offsets = bvh.get_data()
+local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
 
 root_dual_quats = sk.to_root_dual_quat(
     local_rotations, local_positions[:, 0, :], parents, offsets
@@ -172,7 +172,7 @@ import torch
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, local_positions, parents, offsets = bvh.get_data()
+local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
 
 root_dual_quats = sk.to_root_dual_quat(
     torch.from_numpy(local_rotations),
@@ -200,7 +200,7 @@ import pymotion.rotations.ortho6d as sixd
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, _, _, _ = bvh.get_data()
+local_rotations, _, _, _, _, _ = bvh.get_data()
 
 continuous = sixd.from_quat(local_rotations)
 
@@ -216,7 +216,7 @@ import torch
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, _, _, _ = bvh.get_data()
+local_rotations, _, _, _, _, _ = bvh.get_data()
 
 continuous = sixd.from_quat(torch.from_numpy(local_rotations))
 
@@ -242,7 +242,7 @@ from pymotion.visualizer.blender import BlenderConnection
 bvh = BVH()
 bvh.load("test.bvh")
 
-local_rotations, local_positions, parents, offsets = bvh.get_data()
+local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
 global_positions = local_positions[:, 0, :]  # root joint
 pos, _ = fk(local_rotations, global_positions, offsets, parents)
 
