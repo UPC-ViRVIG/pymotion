@@ -10,7 +10,7 @@ exclude = ["*test*"]
 
 [project]
 name = "upc-pymotion"
-version = "0.0.3"
+version = "0.0.4"
 description = "A Python library for working with motion data in NumPy or PyTorch."
 readme = "README.md"
 authors = [{ name = "Jose Luis Ponton", email = "jose.luis.ponton@upc.edu" }]
@@ -27,6 +27,7 @@ requires-python = ">=3.0"
 
 [project.optional-dependencies]
 pytorch = ["torch", "torchvision", "torchaudio"]
+viewer = ["plotly", "dash", "dash_bootstrap_components"]
 test = ["pytest"]
 
 [project.urls]
