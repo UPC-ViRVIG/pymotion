@@ -9,6 +9,7 @@ Some features of PyMotion are:
 - A continuous 6D rotation representation, as introduced by [Zhou et al. [2019]](https://doi.org/10.1109/CVPR.2019.00589)
 - A BVH file reader and preprocessor for loading and transforming motion data
 - Skeletal operations such as Forward Kinematics for computing global joint positions from local joint rotations
+- [Beta] A plotly-based visualizer for debugging and visualizing character animation directly in Python
 - [Beta] A blender visualizer for debugging and visualizing character animation
 - NumPy and PyTorch implementations and tests for all functions
 
@@ -23,8 +24,13 @@ Some features of PyMotion are:
 1. **[Optional]** Install PyTorch using Pip as instructed in their [webpage](https://pytorch.org/get-started/locally/).
 
 2. Install PyMotion:
-```
+```bash
 pip install upc-pymotion
+```
+
+3. **[Optional]** Install Plotly and Dash for the visualizer:
+```bash
+pip install upc-pymotion[viewer]
 ```
 
 ## Examples
@@ -221,6 +227,32 @@ local_rotations, _, _, _, _, _ = bvh.get_data()
 continuous = sixd.from_quat(torch.from_numpy(local_rotations))
 
 local_rotations = sixd.to_quat(continuous)
+```
+
+</details>
+
+<details>
+<summary> Visualize motion in Python </summary> <br/>
+
+```python
+from pymotion.render.viewer import Viewer
+from pymotion.io.bvh import BVH
+from pymotion.ops.forward_kinematics import fk
+
+bvh = BVH()
+bvh.load("test.bvh")
+
+local_rotations, local_positions, parents, offsets, _, _ = bvh.get_data()
+global_positions = local_positions[:, 0, :]  # root joint
+pos, rotmats = fk(local_rotations, global_positions, offsets, parents)
+
+viewer = Viewer(use_reloader=True, xy_size=5)
+viewer.add_skeleton(pos, parents)
+# add additional info using add_sphere(...) and/or add_line(...), examples:
+# viewer.add_sphere(sphere_pos, color="green")
+# viewer.add_line(start_pos, end_pos, color="green")
+viewer.add_floor()
+viewer.run()
 ```
 
 </details>
