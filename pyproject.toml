@@ -10,7 +10,7 @@ exclude = ["*test*"]
 
 [project]
 name = "upc-pymotion"
-version = "0.0.4"
+version = "0.0.5"
 description = "A Python library for working with motion data in NumPy or PyTorch."
 readme = "README.md"
 authors = [{ name = "Jose Luis Ponton", email = "jose.luis.ponton@upc.edu" }]
