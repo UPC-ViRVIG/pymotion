@@ -185,15 +185,9 @@ def to_euler(quaternions: np.array, order: np.array) -> np.array:
     angle_first = 2
     angle_third = 0
 
-    i = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 2:3])[
-        ..., np.newaxis
-    ]
-    j = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 1:2])[
-        ..., np.newaxis
-    ]
-    k = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 0:1])[
-        ..., np.newaxis
-    ]
+    i = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 2:3])[..., np.newaxis]
+    j = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 1:2])[..., np.newaxis]
+    k = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 0:1])[..., np.newaxis]
 
     # check if permutation is even or odd
     sign = (i - j) * (j - k) * (k - i) // 2
@@ -457,9 +451,7 @@ def unroll(quaternions: np.array, axis: int) -> np.array:
     return r
 
 
-def slerp(
-    q0: np.array, q1: np.array, t: float or np.array, shortest: bool = True
-) -> np.array:
+def slerp(q0: np.array, q1: np.array, t: float | np.array, shortest: bool = True) -> np.array:
     """
     Perform spherical linear interpolation (SLERP) between two unit quaternions.
 
@@ -493,9 +485,7 @@ def slerp(
     theta = theta_0 * t  # theta = angle between q0 vector and result
 
     q2 = q1 - q0 * dot
-    q2 /= np.linalg.norm(
-        q2 + 0.000001, axis=-1, keepdims=True
-    )  # {q0, q2} is now an orthonormal basis
+    q2 /= np.linalg.norm(q2 + 0.000001, axis=-1, keepdims=True)  # {q0, q2} is now an orthonormal basis
 
     return np.cos(theta) * q0 + np.sin(theta) * q2
 
