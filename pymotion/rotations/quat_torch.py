@@ -1,3 +1,4 @@
+from __future__ import annotations
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -68,21 +69,15 @@ def from_euler(euler: torch.Tensor, order: np.array) -> torch.Tensor:
     }
     q0 = from_angle_axis(
         euler[..., 0:1],
-        torch.from_numpy(
-            np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 0:1])
-        ).to(euler.device),
+        torch.from_numpy(np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 0:1])).to(euler.device),
     )
     q1 = from_angle_axis(
         euler[..., 1:2],
-        torch.from_numpy(
-            np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 1:2])
-        ).to(euler.device),
+        torch.from_numpy(np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 1:2])).to(euler.device),
     )
     q2 = from_angle_axis(
         euler[..., 2:3],
-        torch.from_numpy(
-            np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 2:3])
-        ).to(euler.device),
+        torch.from_numpy(np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 2:3])).to(euler.device),
     )
     return mul(q0, mul(q1, q2))
 
@@ -193,29 +188,17 @@ def to_euler(quaternions: torch.Tensor, order: np.array) -> torch.Tensor:
     angle_third = 0
 
     i = (
-        torch.from_numpy(
-            np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 2:3])[
-                ..., np.newaxis
-            ]
-        )
+        torch.from_numpy(np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 2:3])[..., np.newaxis])
         .to(quaternions.device)
         .type(torch.long)
     )
     j = (
-        torch.from_numpy(
-            np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 1:2])[
-                ..., np.newaxis
-            ]
-        )
+        torch.from_numpy(np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 1:2])[..., np.newaxis])
         .to(quaternions.device)
         .type(torch.long)
     )
     k = (
-        torch.from_numpy(
-            np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 0:1])[
-                ..., np.newaxis
-            ]
-        )
+        torch.from_numpy(np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 0:1])[..., np.newaxis])
         .to(quaternions.device)
         .type(torch.long)
     )
@@ -238,9 +221,7 @@ def to_euler(quaternions: torch.Tensor, order: np.array) -> torch.Tensor:
     )
 
     # compute second angle
-    euler[..., 1:2] = (2 * torch.arctan2(torch.hypot(c, d), torch.hypot(a, b))) - (
-        torch.pi / 2
-    )
+    euler[..., 1:2] = (2 * torch.arctan2(torch.hypot(c, d), torch.hypot(a, b))) - (torch.pi / 2)
 
     # compute first and third angle
     half_sum = torch.arctan2(b, a)
@@ -486,9 +467,7 @@ def unroll(quaternions: torch.Tensor, dim: int) -> torch.Tensor:
     return r
 
 
-def slerp(
-    q0: torch.Tensor, q1: torch.Tensor, t: float or torch.Tensor, shortest: bool = True
-) -> torch.Tensor:
+def slerp(q0: torch.Tensor, q1: torch.Tensor, t: float | torch.Tensor, shortest: bool = True) -> torch.Tensor:
     """
     Perform spherical linear interpolation (SLERP) between two unit quaternions.
 
@@ -524,9 +503,7 @@ def slerp(
     theta = theta_0 * t  # theta = angle between q0 vector and result
 
     q2 = q1 - q0 * dot
-    q2 /= torch.linalg.norm(
-        q2 + 0.000001, dim=-1, keepdim=True
-    )  # {q0, q2} is now an orthonormal basis
+    q2 /= torch.linalg.norm(q2 + 0.000001, dim=-1, keepdim=True)  # {q0, q2} is now an orthonormal basis
 
     return torch.cos(theta) * q0 + torch.sin(theta) * q2
 
