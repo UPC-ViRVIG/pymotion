@@ -317,11 +317,10 @@ class BVH:
 
         # Update data
         self.data["names"] = [self.data["names"][i] for i in keep_joints]
+        self.data["rot_order"] = self.data["rot_order"][..., keep_joints, :]
         self.data["positions"] = new_pos
         self.data["rotations"] = np.degrees(
-            quat.to_euler(
-                new_rots, order=np.tile(self.data["rot_order"][..., keep_joints, :], (rots.shape[0], 1, 1))
-            )
+            quat.to_euler(new_rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1)))
         )
         self.data["parents"] = new_parents
         self.data["offsets"] = new_offsets
