@@ -34,16 +34,16 @@ class BVH:
         ------
         self.data : dict
             dictionary with the data.
-            ["names"] : list[str]
+            ["names"] : np.array[str]
                 ith-element contain the name of ith-joint.
             ["offsets"] : np.array[n_joints, 3]
                 ith-element contain the offset of ith-joint wrt. its parent joint.
             ["end_sites"] : np.array[n_end_sites, 3]
                 ith-element contain the offset of ith-end-site wrt. its parent joint.
-            ["end_sites_parents"] : list[int]
+            ["end_sites_parents"] : np.array[int]
                 ith-element contain the joint parent of the ith end-site.
-            ["parents"] : list[int]
-                ith-element contain the parent of the ith joint.
+            ["parents"] : np.array[int]
+                ith-element contain the parent of the ith joint. The root joint has parent 0 (itself).
             ["rot_order"] : np.array[n_joints, 3]
                 order per channel of the rotations. The order is 'x', 'y' or 'z'.
             ["positions"] : np.array[n_frames, n_joints, 3]
@@ -118,9 +118,13 @@ class BVH:
                     continue
 
                 if "Frames" in line:
+                    names = np.array(names)
                     number_frames = int(line.split()[1])
                     offsets = np.array(offsets)
+                    parents[0] = 0
+                    parents = np.array(parents)
                     end_sites = np.array(end_sites)
+                    end_sites_parents = np.array(end_sites_parents)
                     rot_order = np.array(rot_order)
                     positions = np.tile(offsets, (number_frames, 1)).reshape(number_frames, len(offsets), 3)
                     rotations = np.zeros((number_frames, len(names), 3))
@@ -169,7 +173,6 @@ class BVH:
             returned dict structure from load(...).
             positions in data["positions"] are assumed to be X,Y,Z order.
             rotations in data["rotations"] are assumed to be in the specified order in data["rot_order"].
-            if data == None, then self.data is used.
         """
 
         with open(filename, "w") as f:
@@ -201,7 +204,7 @@ class BVH:
             joint_order = [0]
 
             for i in range(len(self.data["parents"])):
-                if self.data["parents"][i] == 0:
+                if self.data["parents"][i] == 0 and i != 0:
                     tab = self._save_joint(f, self.data, tab, i, joint_order)
 
             tab = tab[:-1]
@@ -257,12 +260,12 @@ class BVH:
 
         reverse_order = [order.index(i) for i in range(len(order))]
 
-        self.data["names"] = [self.data["names"][reverse_order[i]] for i in range(len(order))]
+        self.data["names"] = np.array([self.data["names"][reverse_order[i]] for i in range(len(order))])
         self.data["offsets"] = self.data["offsets"][reverse_order]
-        self.data["end_sites_parents"] = [order[j] for j in self.data["end_sites_parents"]]
-        self.data["parents"][0] = 0
-        self.data["parents"] = [order[self.data["parents"][reverse_order[i]]] for i in range(len(order))]
-        self.data["parents"][0] = None
+        self.data["end_sites_parents"] = np.array([order[j] for j in self.data["end_sites_parents"]])
+        self.data["parents"] = np.array(
+            [order[self.data["parents"][reverse_order[i]]] for i in range(len(order))]
+        )
         self.data["rot_order"] = self.data["rot_order"][reverse_order]
         self.data["positions"] = self.data["positions"][:, reverse_order]
         self.data["rotations"] = self.data["rotations"][:, reverse_order]
@@ -304,7 +307,6 @@ class BVH:
         for i, p in enumerate(parents):
             if i in keep_joints:
                 new_parents[old_to_new[i]] = old_to_new[p]
-        new_parents[0] = None
 
         # Update end_sites_parents to reflect the removal of joints
         updated_end_sites_parents = [
@@ -316,16 +318,16 @@ class BVH:
         ]
 
         # Update data
-        self.data["names"] = [self.data["names"][i] for i in keep_joints]
+        self.data["names"] = np.array([self.data["names"][i] for i in keep_joints])
         self.data["rot_order"] = self.data["rot_order"][..., keep_joints, :]
         self.data["positions"] = new_pos
         self.data["rotations"] = np.degrees(
             quat.to_euler(new_rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1)))
         )
-        self.data["parents"] = new_parents
+        self.data["parents"] = np.array(new_parents)
         self.data["offsets"] = new_offsets
         self.data["end_sites"] = end_sites[valid_end_sites_indices]
-        self.data["end_sites_parents"] = updated_end_sites_parents
+        self.data["end_sites_parents"] = np.array(updated_end_sites_parents)
 
     def get_data(self):
         """
@@ -338,13 +340,13 @@ class BVH:
             unrolled local rotations (transformed to quaternions).
         pos : np.array[n_frames, n_joints, 3]
             local positions.
-        parents : list[int]
+        parents : np.array[int]
             ith-element contain the parent of the ith joint.
         offsets : np.array[n_joints, 3]
             ith-element contain the offset of ith-joint wrt. its parent joint.
         end_sites : np.array[n_joints, 3]
             ith-element contain the offset of ith-end-site wrt. its parent joint.
-        end_sites_parents : list[int]
+        end_sites_parents : np.array[int]
             ith-element contain the joint parent of the ith end-site.
         """
         rots = quat.unroll(
@@ -357,11 +359,10 @@ class BVH:
         rots = quat.normalize(rots)  # make sure all quaternions are unit quaternions
         pos = self.data["positions"]
         parents = self.data["parents"]
-        parents[0] = 0  # BVH sets root as None
         offsets = self.data["offsets"]
         end_sites = self.data["end_sites"]
         end_sites_parents = self.data["end_sites_parents"]
-        return rots, pos, np.array(parents), offsets, end_sites, end_sites_parents
+        return rots, pos, parents, offsets, end_sites, end_sites_parents
 
     def set_data(self, rots, pos):
         """
@@ -374,7 +375,7 @@ class BVH:
             local rotations (quaternions).
         pos : np.array[n_frames, n_joints, 3]
             local positions.
-        parents : list[int]
+        parents : np.array[int]
             ith-element contain the parent of the ith joint.
         offsets : np.array[n_joints, 3]
             ith-element contain the offset of ith-joint wrt. its parent joint.
@@ -390,7 +391,6 @@ class BVH:
             quat.to_euler(rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1)))
         )
         self.data["positions"] = pos
-        self.data["parents"][0] = None  # BVH sets root as None
 
     def _save_joint(self, f, data, tab, i, joint_order):
         joint_order.append(i)
@@ -430,7 +430,7 @@ class BVH:
             f.write("%s{\n" % tab)
             tab += "\t"
             try:
-                end_site_data = data["end_sites"][data["end_sites_parents"].index(i)]
+                end_site_data = data["end_sites"][np.where(data["end_sites_parents"] == i)[0][0]]
             except ValueError:
                 end_site_data = np.zeros(3)
             f.write("%sOFFSET %f %f %f\n" % (tab, end_site_data[0], end_site_data[1], end_site_data[2]))
