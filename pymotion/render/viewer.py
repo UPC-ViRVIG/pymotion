@@ -1,7 +1,10 @@
 from __future__ import annotations
+from collections import defaultdict
+import json
 import numpy as np
 import plotly.graph_objects as go
-from dash import Dash, html, dcc, callback, ctx, Output, Input
+from dash import Dash, html, dcc, callback, ctx, Output, Input, Patch, no_update, clientside_callback
+from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import webbrowser
 import os
@@ -12,13 +15,16 @@ class Viewer:
     Class to represent a 3D motion visualization tool using Plotly and Dash.
     """
 
-    def __init__(self, xy_size: float = 2, z_size: float = 2, use_reloader: bool = False) -> None:
+    def __init__(
+        self, xy_size: float = 2, z_size: float = 2, framerate: int = 10, use_reloader: bool = False
+    ) -> None:
         """
         Initializes the Viewer.
 
         Args:
             xy_size (float): Size of the viewer in the X and Y dimensions. Defaults to 2.
             z_size (float): Size of the viewer in the Z dimension. Defaults to 2.
+            framerate (int): Frames per second of the visualization. Defaults to 60 fps.
             use_reloader (bool): Whether to use automatic reloading for development. Defaults to False.
         """
         self.app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -27,17 +33,43 @@ class Viewer:
             "skeleton": [],
             "sphere": [],
             "line": [],
-        }  # Keys: Type, Value: dict with parameters + NumPy Array [frames, ...]
-        self.xy_size = xy_size
-        self.z_size = z_size
+        }  # Keys: Type, Value: dict with parameters and a "data" NumPy Array [frames, ...]
+        self.playing = False  # Flag to indicate if the animation is playing
+        self.frametime = 1000 / framerate  # Time between frames in milliseconds
         self.use_reloader = use_reloader
+
+        # Create a default Figure
+        self.fig = go.Figure()
+        self.fig.update_layout(
+            scene=dict(
+                xaxis=dict(range=[-xy_size, xy_size]),
+                yaxis=dict(range=[-xy_size, xy_size]),
+                zaxis=dict(range=[-z_size, z_size]),
+            ),
+            scene_aspectmode="manual",
+            scene_aspectratio=dict(x=1, y=1, z=z_size / xy_size),
+            margin=dict(l=0, r=0, b=0, t=0),
+            showlegend=False,
+            uirevision="constant",  # avoid resetting the camera view
+        )
+
         self._set_max_frames(0)
-        self._set_up_callbacks()
 
     def run(self) -> None:
         """
         Runs the Dash application to start the viewer.
         """
+        # Create objects
+        figure = self._create_figure()
+
+        # Store changes for all frames
+        self.frames = [self._update_figure(frame) for frame in range(self.max_frames)]
+
+        # Create Dash layout
+        self._update_layout(figure)
+
+        # Set up callbacks
+        self._set_up_callbacks()
 
         # Check for debugging environment to avoid duplicated browser tabs
         if not os.environ.get("WERKZEUG_RUN_MAIN"):
@@ -209,9 +241,8 @@ class Viewer:
             value (int): The new value to set for 'max_frames'.
         """
         self.max_frames = value
-        self._update_layout()
 
-    def _update_layout(self) -> None:
+    def _update_layout(self, figure: go.Figure) -> None:
         """
         Updates the layout of the Dash application. This includes setting the plot size and the slider range.
         """
@@ -220,12 +251,26 @@ class Viewer:
                 html.H1(children="PyMotion Viewer", style={"textAlign": "center"}),
                 dcc.Graph(
                     id="graph-content",
+                    figure=figure,
                     style={"height": "80vh", "margin": "auto"},
                     responsive=True,
-                    config={"displayModeBar": False},
+                    config={
+                        "displayModeBar": False,
+                        "scrollZoom": False,
+                    },  # TODO: for now disable scroll zoom until plotly solves the bug: scroll zoom does not save the internal state for uirevision https://github.com/plotly/plotly.js/issues/5004
+                ),
+                dcc.Interval(
+                    id="interval-timer",
+                    interval=self.frametime,
+                    disabled=True,
+                    n_intervals=0,
                 ),
                 dbc.Row(
                     [
+                        dbc.Col(
+                            dbc.Button(id="play-stop-button", n_clicks=0, children="Play", color="primary"),
+                            width=1,
+                        ),
                         dbc.Col(
                             dbc.Input(
                                 type="number",
@@ -257,18 +302,80 @@ class Viewer:
         Sets up the Dash callbacks to enable interactivity (updating frame based on input or slider interaction).
         """
 
+        # clientside_callback(
+        #     """
+        #     function updateFrame(input_value, slider_value, n_intervals, store_frames) {
+        #         const precomputedFigures = JSON.parse(store_frames);
+
+        #         // Get the triggered component ID
+        #         const triggeredId = dash_clientside.callback_context.triggered[0].prop_id.split('.')[0];
+
+        #         let frame;
+        #         if (triggeredId === 'frame-input') {
+        #             frame = input_value;
+        #         } else if (triggeredId === 'frames-slider') {
+        #             frame = slider_value;
+        #         } else if (triggeredId === 'interval-timer') {
+        #             // Handle autoplay logic if needed
+        #             frame = (n_intervals + 1) % precomputedFigures.length;
+        #         } else {
+        #             frame = 0; // Initial frame or fallback
+        #         }
+
+        #         // Retrieve the precomputed figure
+        #         const data = precomputedFigures[frame];
+        #         const patch = {
+        #             data: data,
+        #         };
+
+        #         // Update the components
+        #         return [patch, frame, frame];
+        #     }
+        #     """,
+        #     Output("graph-content", "figure"),
+        #     Output("frame-input", "value"),
+        #     Output("frames-slider", "value"),
+        #     Input("frame-input", "value"),
+        #     Input("frames-slider", "value"),
+        #     Input("interval-timer", "n_intervals"),
+        #     Input("store-frames", "data"),
+        # )
+
         @callback(
             Output("graph-content", "figure"),
             Output("frame-input", "value"),
             Output("frames-slider", "value"),
             Input("frame-input", "value"),
             Input("frames-slider", "value"),
+            Input("interval-timer", "n_intervals"),
         )
-        def update_frame(input_value, slider_value):
+        def update_frame(input_value, slider_value, n_intervals):
             """Handles changes to the frame input or slider."""
             id = ctx.triggered_id
-            new_value = input_value if id == "frame-input" else slider_value
-            return self._create_figure(new_value), new_value, new_value
+            if id == "frame-input":
+                return self.frames[input_value], input_value, input_value
+            elif id == "frames-slider":
+                return self.frames[slider_value], slider_value, slider_value
+            elif id == "interval-timer":
+                frame = (input_value + 1) % self.max_frames
+                return self.frames[frame], frame, frame
+            elif id is None:
+                # initial call
+                return self.frames[0], 0, 0
+            return no_update, no_update, no_update
+
+        @callback(
+            Output("play-stop-button", "children"),
+            Output("play-stop-button", "color"),
+            Output("interval-timer", "disabled"),
+            Input("play-stop-button", "n_clicks"),
+        )
+        def update_button_text(play_stop_clicks):
+            """Updates the button text based on play/stop status."""
+            if play_stop_clicks % 2 == 1:
+                return "Stop", "danger", False
+            else:
+                return "Play", "primary", True
 
     def _create_figure(self, frame: int = 0) -> go.Figure:
         """
@@ -278,7 +385,7 @@ class Viewer:
             frame (int): The frame number to display. Defaults to 0.
 
         Returns:
-            go.Figure: The Plotly Figure object representing the scene at the specified frame.
+            go.Figure: A Plotly Figure object containing the visualization.
         """
         data = []
         for key, value in self.dynamic_data.items():
@@ -331,19 +438,60 @@ class Viewer:
                                 line=dict(color=line["color"], width=line["line_width"]),
                             )
                         )
-        fig = go.Figure(self.static_objs + data)
-        fig.update_layout(
-            scene=dict(
-                xaxis=dict(range=[-self.xy_size, self.xy_size]),
-                yaxis=dict(range=[-self.xy_size, self.xy_size]),
-                zaxis=dict(range=[-self.z_size, self.z_size]),
-            ),
-            scene_aspectmode="manual",
-            scene_aspectratio=dict(x=1, y=1, z=self.z_size / self.xy_size),
-            margin=dict(l=0, r=0, b=0, t=0),
-            showlegend=False,
-        )
-        return fig
+        self.fig.data = []
+        self.fig.add_traces(data + self.static_objs)
+        return self.fig
+
+    def _update_figure(self, frame: int = 0) -> dict:
+        """
+        Creates the Plotly figure for a given frame of the visualization.
+
+        Args:
+            frame (int): The frame number to display. Defaults to 0.
+
+        Returns:
+            Patch: A Patch object containing the updated Plotly figure.
+        """
+        patch = Patch()
+        i = 0
+        for key, value in self.dynamic_data.items():
+            if key == "skeleton":
+                for skeleton in value:
+                    if frame < len(skeleton["data"]):
+                        i = _update_skeleton(
+                            patch=patch,
+                            i=i,
+                            joints=skeleton["data"][frame],
+                            parents=skeleton["parents"],
+                            sphere_mode=skeleton["sphere_mode"],
+                            radius_joints=skeleton["radius_joints"],
+                            resolution=skeleton["resolution"],
+                        )
+            elif key == "sphere":
+                for sphere in value:
+                    if frame < len(sphere["center"]):
+                        if sphere["sphere_mode"] == "scatter":
+                            patch["data"][i]["x"] = [sphere["center"][frame][0]]
+                            patch["data"][i]["y"] = [sphere["center"][frame][1]]
+                            patch["data"][i]["z"] = [sphere["center"][frame][2]]
+                        elif sphere["sphere_mode"] == "mesh":
+                            x, y, z = _get_mesh_sphere_position(
+                                center=sphere["center"][frame],
+                                radius=sphere["radius"],
+                                resolution=sphere["resolution"],
+                            )
+                            patch["data"][i]["x"] = x
+                            patch["data"][i]["y"] = y
+                            patch["data"][i]["z"] = z
+                    i += 1
+            elif key == "line":
+                for line in value:
+                    if frame < len(line["start"]):
+                        patch["data"][i]["x"] = [line["start"][frame][0], line["end"][frame][0]]
+                        patch["data"][i]["y"] = [line["start"][frame][1], line["end"][frame][1]]
+                        patch["data"][i]["z"] = [line["start"][frame][2], line["end"][frame][2]]
+                    i += 1
+        return patch
 
 
 def _create_mesh_sphere(
@@ -364,6 +512,26 @@ def _create_mesh_sphere(
     Returns:
         go.Mesh3d: A Plotly Mesh3d object representing the sphere.
     """
+    x, y, z = _get_mesh_sphere_position(center=center, radius=radius, resolution=resolution)
+    return go.Mesh3d(x=x, y=y, z=z, color=color, opacity=1.00, alphahull=0)
+
+
+def _get_mesh_sphere_position(
+    center: np.ndarray = np.array([0, 0, 0]), radius: float = 1, resolution: float = np.pi / 8
+) -> np.ndarray:
+    """
+    Gets the points of a 3D mesh representation of a sphere with customizable position, radius, and resolution.
+
+    Args:
+        center (np.ndarray): (x, y, z) coordinates of the sphere's center. Defaults to np.array[(0, 0, 0)].
+        radius (float): Radius of the sphere. Defaults to 1.
+        resolution (float): Angular resolution for generating the sphere. Defaults to np.pi/8.
+
+    Returns:
+        np.ndarray: A NumPy array of shape (n_points,) containing the x coordinate of the sphere.
+        np.ndarray: A NumPy array of shape (n_points,) containing the y coordinate of the sphere.
+        np.ndarray: A NumPy array of shape (n_points,) containing the z coordinate of the sphere.
+    """
     d = resolution  # Angular spacing
 
     theta, phi = np.mgrid[0 : np.pi + d : d, 0 : 2 * np.pi : d]
@@ -383,8 +551,7 @@ def _create_mesh_sphere(
 
     points = np.vstack([x.ravel(), y.ravel(), z.ravel()])
     x, y, z = points
-
-    return go.Mesh3d(x=x, y=y, z=z, color=color, opacity=1.00, alphahull=0)
+    return x, y, z
 
 
 def _create_floor(
@@ -485,3 +652,35 @@ def _create_skeleton(
             )
 
     return sphere_data + line_data
+
+
+def _update_skeleton(
+    patch: Patch,
+    i: int,
+    joints: np.ndarray,
+    parents: np.ndarray,
+    sphere_mode: str = "scatter",
+    radius_joints: float = 0.025,
+    resolution: float = np.pi / 8,
+) -> int:
+    for joint_idx, parent_idx in enumerate(parents):
+        joint = joints[joint_idx]
+        if sphere_mode == "scatter":
+            patch["data"][i]["x"] = [joint[0]]
+            patch["data"][i]["y"] = [joint[1]]
+            patch["data"][i]["z"] = [joint[2]]
+        else:
+            x, y, z = _get_mesh_sphere_position(center=joint, radius=radius_joints, resolution=resolution)
+            patch["data"][i]["x"] = x
+            patch["data"][i]["y"] = y
+            patch["data"][i]["z"] = z
+        i += 1
+    for joint_idx, parent_idx in enumerate(parents):
+        joint = joints[joint_idx]
+        if parent_idx is not None and parent_idx >= 0:
+            parent = joints[parent_idx]
+            patch["data"][i]["x"] = [joint[0], parent[0]]
+            patch["data"][i]["y"] = [joint[1], parent[1]]
+            patch["data"][i]["z"] = [joint[2], parent[2]]
+            i += 1
+    return i
