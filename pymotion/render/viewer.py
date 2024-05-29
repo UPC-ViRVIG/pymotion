@@ -1,10 +1,8 @@
 from __future__ import annotations
-from collections import defaultdict
 import json
 import numpy as np
 import plotly.graph_objects as go
-from dash import Dash, html, dcc, callback, ctx, Output, Input, Patch, no_update, clientside_callback
-from dash.exceptions import PreventUpdate
+from dash import Dash, html, dcc, callback, Output, Input, State, clientside_callback
 import dash_bootstrap_components as dbc
 import webbrowser
 import os
@@ -16,7 +14,7 @@ class Viewer:
     """
 
     def __init__(
-        self, xy_size: float = 2, z_size: float = 2, framerate: int = 10, use_reloader: bool = False
+        self, xy_size: float = 2, z_size: float = 2, framerate: int = 60, use_reloader: bool = False
     ) -> None:
         """
         Initializes the Viewer.
@@ -28,6 +26,7 @@ class Viewer:
             use_reloader (bool): Whether to use automatic reloading for development. Defaults to False.
         """
         self.app = Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+        self.app.title = "PyMotion Viewer"
         self.static_objs = []  # Array of Plotly Objects
         self.dynamic_data = {
             "skeleton": [],
@@ -63,10 +62,10 @@ class Viewer:
         figure = self._create_figure()
 
         # Store changes for all frames
-        self.frames = [self._update_figure(frame) for frame in range(self.max_frames)]
+        frames = [self._update_figure(frame) for frame in range(self.max_frames)]
 
         # Create Dash layout
-        self._update_layout(figure)
+        self._update_layout(figure, frames)
 
         # Set up callbacks
         self._set_up_callbacks()
@@ -81,11 +80,8 @@ class Viewer:
         data: np.ndarray,
         parents: np.ndarray,
         color: str = "red",
-        sphere_mode: str = "scatter",
-        scatter_size: float = 3.0,
+        size: float = 3.0,
         line_width: float = 2.0,
-        radius_joints: float = 0.025,
-        resolution: float = np.pi / 8,
     ) -> None:
         """
         Adds a skeleton to the viewer.
@@ -94,11 +90,8 @@ class Viewer:
             data (np.ndarray): NumPy array of shape [frames, joints, 3] or [joints, 3] containing joint positions.
             parents (np.ndarray): NumPy array indicating the parent joint for each joint, enabling line connections.
             color (str): Color of the skeleton elements. Defaults to "red".
-            sphere_mode (str): 'scatter' for a point cloud representation, or 'mesh' for a 3D mesh sphere. Defaults to 'scatter'.
-            scatter_size (float): Size of scatter markers if 'sphere_mode' is 'scatter'. Defaults to 3.0.
+            size (float): Size of scatter markers. Defaults to 3.0.
             line_width (float): Width of the lines connecting skeleton joints. Defaults to 2.0.
-            radius_joints (float): Radius of joints if represented as spheres ('mesh' mode). Defaults to 0.025.
-            resolution (float): Angular resolution for sphere meshes (`mesh` mode). Defaults to np.pi/8.
         """
 
         assert data.ndim in (2, 3), "'data' must have shape [frames, joints, 3] or [joints, 3]"
@@ -109,11 +102,8 @@ class Viewer:
                     data if data.ndim == 2 else data[0],
                     parents,
                     color=color,
-                    sphere_mode=sphere_mode,
-                    scatter_size=scatter_size,
+                    size=size,
                     line_width=line_width,
-                    radius_joints=radius_joints,
-                    resolution=resolution,
                 )
             )
         else:
@@ -122,11 +112,8 @@ class Viewer:
                     "data": data,
                     "parents": parents,
                     "color": color,
-                    "sphere_mode": sphere_mode,
-                    "scatter_size": scatter_size,
+                    "size": size,
                     "line_width": line_width,
-                    "radius_joints": radius_joints,
-                    "resolution": resolution,
                 }
             )
             self._set_max_frames(max(self.max_frames, data.shape[0]))
@@ -142,6 +129,7 @@ class Viewer:
     ) -> None:
         """
         Adds a sphere to the viewer.
+        Note: when sphere_mode os "mesh", it can be slow for large number of frames and/or spheres.
 
         Args:
             center (np.ndarray): NumPy array of shape [frames, 3] or [3] specifying the sphere's center coordinates.
@@ -242,13 +230,13 @@ class Viewer:
         """
         self.max_frames = value
 
-    def _update_layout(self, figure: go.Figure) -> None:
+    def _update_layout(self, figure: go.Figure, frames: list) -> None:
         """
         Updates the layout of the Dash application. This includes setting the plot size and the slider range.
         """
+        frames_json = json.dumps(frames)
         self.app.layout = html.Div(
             [
-                html.H1(children="PyMotion Viewer", style={"textAlign": "center"}),
                 dcc.Graph(
                     id="graph-content",
                     figure=figure,
@@ -259,6 +247,8 @@ class Viewer:
                         "scrollZoom": False,
                     },  # TODO: for now disable scroll zoom until plotly solves the bug: scroll zoom does not save the internal state for uirevision https://github.com/plotly/plotly.js/issues/5004
                 ),
+                dcc.Store(id="store-frames", data=frames_json),
+                dcc.Store(id="store-playback-speed", data=1),
                 dcc.Interval(
                     id="interval-timer",
                     interval=self.frametime,
@@ -268,31 +258,66 @@ class Viewer:
                 dbc.Row(
                     [
                         dbc.Col(
-                            dbc.Button(id="play-stop-button", n_clicks=0, children="Play", color="primary"),
-                            width=1,
-                        ),
-                        dbc.Col(
-                            dbc.Input(
-                                type="number",
-                                value=0,
-                                style={"textAlign": "center"},
-                                id="frame-input",
+                            dbc.Row(
+                                [
+                                    dbc.Col(
+                                        dbc.Button(
+                                            id="play-stop-button",
+                                            n_clicks=0,
+                                            children="Play",
+                                            color="primary",
+                                            style={
+                                                "width": "90%",
+                                                "margin-left": "5%",
+                                            },
+                                        ),
+                                        width=3,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Button(
+                                            id="playback-speed",
+                                            n_clicks=0,
+                                            children="1x",
+                                            color="light",
+                                            style={"width": "90%"},
+                                        ),
+                                        width=2,
+                                    ),
+                                    dbc.Col(
+                                        dbc.Input(
+                                            type="number",
+                                            value=0,
+                                            style={"textAlign": "center", "width": "90%"},
+                                            id="frame-input",
+                                        ),
+                                        width=7,
+                                    ),
+                                ],
+                                className="g-1",
                             ),
-                            width=1,
+                            width=4,
                         ),
                         dbc.Col(
-                            dcc.Slider(
-                                min=0,
-                                max=self.max_frames - 1,
-                                step=1,
-                                value=0,
-                                marks=None,
-                                id="frames-slider",
+                            html.Div(
+                                dcc.Slider(
+                                    min=0,
+                                    max=self.max_frames - 1,
+                                    step=1,
+                                    value=0,
+                                    marks=None,
+                                    id="frames-slider",
+                                ),
+                                style={
+                                    "width": "100%",
+                                    "height": "100%",
+                                    "margin-left": "-25px",
+                                    "margin-bottom": "-25px",
+                                },
                             ),
                             width=8,
                         ),
                     ],
-                    justify="center",
+                    align="center",
                 ),
             ]
         )
@@ -302,67 +327,46 @@ class Viewer:
         Sets up the Dash callbacks to enable interactivity (updating frame based on input or slider interaction).
         """
 
-        # clientside_callback(
-        #     """
-        #     function updateFrame(input_value, slider_value, n_intervals, store_frames) {
-        #         const precomputedFigures = JSON.parse(store_frames);
+        clientside_callback(
+            """
+            function updateFrame(input_value, slider_value, n_intervals, store_frames, playback_speed) {
+                // Get the triggered component ID
+                let triggeredId = 'none';
+                if (dash_clientside.callback_context.triggered[0] != undefined) 
+                {
+                    triggeredId = dash_clientside.callback_context.triggered[0].prop_id.split('.')[0];
+                }
 
-        #         // Get the triggered component ID
-        #         const triggeredId = dash_clientside.callback_context.triggered[0].prop_id.split('.')[0];
+                // Parse the precomputed figures from the store only once
+                if (!window.precomputedFigures) window.precomputedFigures = JSON.parse(store_frames);
+                
+                let frame;
+                if (triggeredId === 'frame-input') {
+                    frame = input_value;
+                } else if (triggeredId === 'frames-slider') {
+                    frame = slider_value;
+                } else if (triggeredId === 'interval-timer') {
+                    // Handle autoplay logic if needed
+                    frame = (input_value + playback_speed) % window.precomputedFigures.length;
+                } else {
+                    frame = 0; // Initial frame or fallback
+                }
 
-        #         let frame;
-        #         if (triggeredId === 'frame-input') {
-        #             frame = input_value;
-        #         } else if (triggeredId === 'frames-slider') {
-        #             frame = slider_value;
-        #         } else if (triggeredId === 'interval-timer') {
-        #             // Handle autoplay logic if needed
-        #             frame = (n_intervals + 1) % precomputedFigures.length;
-        #         } else {
-        #             frame = 0; // Initial frame or fallback
-        #         }
-
-        #         // Retrieve the precomputed figure
-        #         const data = precomputedFigures[frame];
-        #         const patch = {
-        #             data: data,
-        #         };
-
-        #         // Update the components
-        #         return [patch, frame, frame];
-        #     }
-        #     """,
-        #     Output("graph-content", "figure"),
-        #     Output("frame-input", "value"),
-        #     Output("frames-slider", "value"),
-        #     Input("frame-input", "value"),
-        #     Input("frames-slider", "value"),
-        #     Input("interval-timer", "n_intervals"),
-        #     Input("store-frames", "data"),
-        # )
-
-        @callback(
-            Output("graph-content", "figure"),
+                const data = window.precomputedFigures[frame];
+                
+                // Update the graph using extendData
+                return [[data[0], data[1], data[2]], frame, frame];
+            }
+            """,
+            Output("graph-content", "extendData"),
             Output("frame-input", "value"),
             Output("frames-slider", "value"),
             Input("frame-input", "value"),
             Input("frames-slider", "value"),
             Input("interval-timer", "n_intervals"),
+            Input("store-frames", "data"),
+            State("store-playback-speed", "data"),
         )
-        def update_frame(input_value, slider_value, n_intervals):
-            """Handles changes to the frame input or slider."""
-            id = ctx.triggered_id
-            if id == "frame-input":
-                return self.frames[input_value], input_value, input_value
-            elif id == "frames-slider":
-                return self.frames[slider_value], slider_value, slider_value
-            elif id == "interval-timer":
-                frame = (input_value + 1) % self.max_frames
-                return self.frames[frame], frame, frame
-            elif id is None:
-                # initial call
-                return self.frames[0], 0, 0
-            return no_update, no_update, no_update
 
         @callback(
             Output("play-stop-button", "children"),
@@ -376,6 +380,23 @@ class Viewer:
                 return "Stop", "danger", False
             else:
                 return "Play", "primary", True
+
+        @callback(
+            Output("playback-speed", "children"),
+            Output("store-playback-speed", "data"),
+            Input("playback-speed", "n_clicks"),
+        )
+        def update_playback_speed(playback_speed_clicks):
+            """Updates the playback speed based on button clicks."""
+            speed = 1
+            op = playback_speed_clicks % 4
+            if op == 1:
+                speed = 2
+            elif op == 2:
+                speed = 4
+            elif op == 3:
+                speed = 8
+            return f"{speed}x", speed
 
     def _create_figure(self, frame: int = 0) -> go.Figure:
         """
@@ -397,11 +418,8 @@ class Viewer:
                                 joints=skeleton["data"][frame],
                                 parents=skeleton["parents"],
                                 color=skeleton["color"],
-                                sphere_mode=skeleton["sphere_mode"],
-                                scatter_size=skeleton["scatter_size"],
+                                size=skeleton["size"],
                                 line_width=skeleton["line_width"],
-                                radius_joints=skeleton["radius_joints"],
-                                resolution=skeleton["resolution"],
                             )
                         )
             elif key == "sphere":
@@ -442,7 +460,7 @@ class Viewer:
         self.fig.add_traces(data + self.static_objs)
         return self.fig
 
-    def _update_figure(self, frame: int = 0) -> dict:
+    def _update_figure(self, frame: int = 0):
         """
         Creates the Plotly figure for a given frame of the visualization.
 
@@ -452,46 +470,54 @@ class Viewer:
         Returns:
             Patch: A Patch object containing the updated Plotly figure.
         """
-        patch = Patch()
+        data = {"x": [], "y": [], "z": []}
+        indices = []
+        number_of_objects = []
         i = 0
         for key, value in self.dynamic_data.items():
             if key == "skeleton":
                 for skeleton in value:
                     if frame < len(skeleton["data"]):
                         i = _update_skeleton(
-                            patch=patch,
+                            data=data,
+                            indices=indices,
+                            number_of_objects=number_of_objects,
                             i=i,
                             joints=skeleton["data"][frame],
                             parents=skeleton["parents"],
-                            sphere_mode=skeleton["sphere_mode"],
-                            radius_joints=skeleton["radius_joints"],
-                            resolution=skeleton["resolution"],
                         )
             elif key == "sphere":
                 for sphere in value:
                     if frame < len(sphere["center"]):
                         if sphere["sphere_mode"] == "scatter":
-                            patch["data"][i]["x"] = [sphere["center"][frame][0]]
-                            patch["data"][i]["y"] = [sphere["center"][frame][1]]
-                            patch["data"][i]["z"] = [sphere["center"][frame][2]]
+                            indices.append(i)
+                            data["x"].append([sphere["center"][frame][0]])
+                            data["y"].append([sphere["center"][frame][1]])
+                            data["z"].append([sphere["center"][frame][2]])
+                            number_of_objects.append(1)
                         elif sphere["sphere_mode"] == "mesh":
                             x, y, z = _get_mesh_sphere_position(
                                 center=sphere["center"][frame],
                                 radius=sphere["radius"],
                                 resolution=sphere["resolution"],
                             )
-                            patch["data"][i]["x"] = x
-                            patch["data"][i]["y"] = y
-                            patch["data"][i]["z"] = z
+                            indices.append(i)
+                            data["x"].append(x.tolist())
+                            data["y"].append(y.tolist())
+                            data["z"].append(z.tolist())
+                            number_of_objects.append(len(data["x"][-1]))
                     i += 1
             elif key == "line":
                 for line in value:
                     if frame < len(line["start"]):
-                        patch["data"][i]["x"] = [line["start"][frame][0], line["end"][frame][0]]
-                        patch["data"][i]["y"] = [line["start"][frame][1], line["end"][frame][1]]
-                        patch["data"][i]["z"] = [line["start"][frame][2], line["end"][frame][2]]
+                        indices.append(i)
+                        data["x"].append([line["start"][frame][0], line["end"][frame][0]])
+                        data["y"].append([line["start"][frame][1], line["end"][frame][1]])
+                        data["z"].append([line["start"][frame][2], line["end"][frame][2]])
+                        number_of_objects.append(2)
                     i += 1
-        return patch
+        number_of_objects_per_axis = {"x": number_of_objects, "y": number_of_objects, "z": number_of_objects}
+        return (data, indices, number_of_objects_per_axis)
 
 
 def _create_mesh_sphere(
@@ -598,12 +624,9 @@ def _create_skeleton(
     joints: np.ndarray,
     parents: np.ndarray,
     color: str = "red",
-    sphere_mode: str = "scatter",
-    scatter_size: float = 3.0,
+    size: float = 3.0,
     line_width: float = 2.0,
-    radius_joints: float = 0.025,
-    resolution: float = np.pi / 8,
-) -> list[go.Scatter3d | go.Mesh3d]:
+) -> list[go.Scatter3d]:
     """
     Creates Plotly objects for a skeleton using a NumPy array of joint positions.
 
@@ -611,34 +634,26 @@ def _create_skeleton(
         joints (np.ndarray): NumPy array of shape (num_joints, 3) containing the x, y, and z coordinates of the joints.
         parents (np.ndarray): NumPy array defining the parent joint for each joint, enabling line connections.
         color (str): Color of the skeleton elements. Defaults to 'red'.
-        sphere_mode (str): Controls sphere representation ('scatter' or 'mesh'). Defaults to 'scatter'.
-        scatter_size (float): Size of scatter markers if 'sphere_mode' is 'scatter'. Defaults to 3.0.
+        size (float): Size of scatter markers. Defaults to 3.0.
         line_width (float): Width of the lines connecting skeleton joints. Defaults to 2.0.
-        radius_joints (float): Radius of joints if represented as spheres ('mesh' mode). Defaults to 0.025.
-        resolution (float): Angular resolution for sphere meshes (`mesh` mode). Defaults to np.pi/8.
 
     Returns:
-        list[go.Scatter3d | go.Mesh3d]: A list of Plotly go.Scatter3d and/or go.Mesh3d objects representing the skeleton.
+        list[go.Scatter3d]: A list of Plotly go.Scatter3d objects representing the skeleton.
     """
 
     sphere_data = []
     line_data = []
     for joint_idx, parent_idx in enumerate(parents):
         joint = joints[joint_idx]
-        if sphere_mode == "scatter":
-            sphere_data.append(
-                go.Scatter3d(
-                    x=[joint[0]],
-                    y=[joint[1]],
-                    z=[joint[2]],
-                    mode="markers",
-                    marker=dict(color=color, size=scatter_size),
-                )
+        sphere_data.append(
+            go.Scatter3d(
+                x=[joint[0]],
+                y=[joint[1]],
+                z=[joint[2]],
+                mode="markers",
+                marker=dict(color=color, size=size),
             )
-        else:
-            sphere_data.append(
-                _create_mesh_sphere(center=joint, radius=radius_joints, color=color, resolution=resolution)
-            )
+        )
         if parent_idx is not None and parent_idx >= 0:
             parent = joints[parent_idx]
             line_data.append(
@@ -655,32 +670,29 @@ def _create_skeleton(
 
 
 def _update_skeleton(
-    patch: Patch,
+    data: dict,
+    indices: list,
+    number_of_objects: list,
     i: int,
     joints: np.ndarray,
     parents: np.ndarray,
-    sphere_mode: str = "scatter",
-    radius_joints: float = 0.025,
-    resolution: float = np.pi / 8,
 ) -> int:
     for joint_idx, parent_idx in enumerate(parents):
         joint = joints[joint_idx]
-        if sphere_mode == "scatter":
-            patch["data"][i]["x"] = [joint[0]]
-            patch["data"][i]["y"] = [joint[1]]
-            patch["data"][i]["z"] = [joint[2]]
-        else:
-            x, y, z = _get_mesh_sphere_position(center=joint, radius=radius_joints, resolution=resolution)
-            patch["data"][i]["x"] = x
-            patch["data"][i]["y"] = y
-            patch["data"][i]["z"] = z
+        indices.append(i)
+        data["x"].append([joint[0]])
+        data["y"].append([joint[1]])
+        data["z"].append([joint[2]])
+        number_of_objects.append(1)
         i += 1
     for joint_idx, parent_idx in enumerate(parents):
         joint = joints[joint_idx]
         if parent_idx is not None and parent_idx >= 0:
             parent = joints[parent_idx]
-            patch["data"][i]["x"] = [joint[0], parent[0]]
-            patch["data"][i]["y"] = [joint[1], parent[1]]
-            patch["data"][i]["z"] = [joint[2], parent[2]]
+            indices.append(i)
+            number_of_objects.append(2)
+            data["x"].append([joint[0], parent[0]])
+            data["y"].append([joint[1], parent[1]])
+            data["z"].append([joint[2], parent[2]])
             i += 1
     return i
