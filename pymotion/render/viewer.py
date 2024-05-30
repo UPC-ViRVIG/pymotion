@@ -95,6 +95,14 @@ class Viewer:
         """
 
         assert data.ndim in (2, 3), "'data' must have shape [frames, joints, 3] or [joints, 3]"
+        assert parents.ndim == 1, "'parents' must have shape [joints]"
+        assert data.shape[-1] == 3, "'data' must have shape [..., 3]"
+        assert data.shape[-2] == parents.shape[0], "'data' and 'parents' must have the same number of joints"
+
+        if data.dtype != np.float64:
+            data = data.astype(np.float64)
+        if parents.dtype != np.int64:
+            parents = parents.astype(np.int64)
 
         if data.ndim == 2 or data.shape[0] == 1:
             self.static_objs.extend(
@@ -142,6 +150,10 @@ class Viewer:
 
         assert sphere_mode in ("scatter", "mesh"), "'sphere_mode' must be 'scatter' or 'mesh'"
         assert center.ndim in (1, 2), "'center' must have shape [frames, 3] or [3]"
+        assert center.shape[-1] == 3, "'center' must have shape [..., 3]"
+
+        if center.dtype != np.float64:
+            center = center.astype(np.float64)
 
         if center.ndim == 1 or center.shape[0] == 1:
             if sphere_mode == "scatter":
@@ -185,6 +197,13 @@ class Viewer:
         assert start.ndim in (1, 2), "'start' must have shape [frames, 3] or [3]"
         assert end.ndim in (1, 2), "'end' must have shape [frames, 3] or [3]"
         assert start.ndim == end.ndim, "'start' and 'end' must have the same number of dimensions"
+        assert start.shape[-1] == 3 and end.shape[-1], "'start' and 'end' must have shape [..., 3]"
+        assert start.shape[0] == end.shape[0], "'start' and 'end' must have the same number of frames"
+
+        if start.dtype != np.float64:
+            start = start.astype(np.float64)
+        if end.dtype != np.float64:
+            end = end.astype(np.float64)
 
         if start.ndim == 1 or start.shape[0] == 1:
             self.static_objs.append(
