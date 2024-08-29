@@ -25,8 +25,8 @@ class Viewer:
         Initializes the Viewer.
 
         Args:
-            xy_size (float): Size of the viewer in the X and Y dimensions. Defaults to 2.
-            z_size (float): Size of the viewer in the Z dimension. Defaults to 2.
+            xy_size (float or list(float)): Size of the viewer in the X and Y dimensions. Defaults to 2. Can be interval [-3, 2].
+            z_size (float or list(float)): Size of the viewer in the Z dimension. Defaults to 2. Can be interval [-3, 2].
             framerate (int): Frames per second of the visualization. Defaults to 60 fps.
             use_reloader (bool): Whether to use automatic reloading for development. Defaults to False.
         """
