@@ -1,5 +1,6 @@
 from __future__ import annotations
 import json
+from typing import List, Union
 import numpy as np
 import plotly.graph_objects as go
 from dash import Dash, html, dcc, callback, Output, Input, State, clientside_callback
@@ -14,7 +15,11 @@ class Viewer:
     """
 
     def __init__(
-        self, xy_size: float = 2, z_size: float = 2, framerate: int = 60, use_reloader: bool = False
+        self, 
+        xy_size: Union[float, List[float]] = 2, 
+        z_size: Union[float, List[float]] = 2, 
+        framerate: int = 60, 
+        use_reloader: bool = False
     ) -> None:
         """
         Initializes the Viewer.
@@ -36,17 +41,32 @@ class Viewer:
         self.playing = False  # Flag to indicate if the animation is playing
         self.frametime = 1000 / framerate  # Time between frames in milliseconds
         self.use_reloader = use_reloader
+        
+        if isinstance(xy_size, list):
+            assert len(xy_size) == 2, "if you pass interval, it should contain only 2 values"
+            assert xy_size[0] < xy_size[1], "if you pass interval, first value should be less than second"
+            xy_dict = dict(range=[xy_size[0], xy_size[1]])
+        else:
+            xy_dict = dict(range=[-xy_size, xy_size])
+        if isinstance(z_size, list):
+            assert len(z_size) == 2, "if you pass interval, it should contain only 2 values"
+            assert z_size[0] < z_size[1], "if you pass interval, first value should be less than second"
+            z_dict = dict(range=[z_size[0], z_size[1]])
+        else:
+            z_dict = dict(range=[-z_size, z_size])
+            
+        aspect_ratio_value = (z_dict["range"][1] - z_dict["range"][0]) / (xy_dict["range"][1] - xy_dict["range"][0])
 
         # Create a default Figure
         self.fig = go.Figure()
         self.fig.update_layout(
             scene=dict(
-                xaxis=dict(range=[-xy_size, xy_size]),
-                yaxis=dict(range=[-xy_size, xy_size]),
-                zaxis=dict(range=[-z_size, z_size]),
+                xaxis=xy_dict,
+                yaxis=xy_dict,
+                zaxis=z_dict,
             ),
             scene_aspectmode="manual",
-            scene_aspectratio=dict(x=1, y=1, z=z_size / xy_size),
+            scene_aspectratio=dict(x=1, y=1, z=aspect_ratio_value),
             margin=dict(l=0, r=0, b=0, t=0),
             showlegend=False,
             uirevision="constant",  # avoid resetting the camera view
