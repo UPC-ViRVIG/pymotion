@@ -51,14 +51,15 @@ class TestQuat:
         assert_allclose(t_angle_t.numpy(), angle, atol=self.atol)
         assert_allclose(t_axis_t.numpy(), axis, atol=self.atol)
         # simple samples
-        axis = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]])
+        axis = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
         axis_t = torch.from_numpy(axis)
-        angle = np.array([np.pi / 2, np.pi / 4, np.pi])[..., np.newaxis]
+        angle = np.array([0, np.pi / 2, np.pi / 4, np.pi])[..., np.newaxis]
         angle_t = torch.from_numpy(angle)
         q = quat.from_angle_axis(angle, axis)
         q_t = quat_torch.from_angle_axis(angle_t, axis_t)
         ground_truth = np.array(
             [
+                [1, 0, 0, 0],
                 [0.70710678, 0.70710678, 0, 0],
                 [0.92387953, 0, 0.38268343, 0],
                 [0, 0, 0, 1],
@@ -142,9 +143,7 @@ class TestQuat:
         # check if inverse operations produce the same result
         t_euler = quat.to_euler(q, order)
         t_euler_t = quat_torch.to_euler(q_t, order)
-        t2_euler = quat.to_euler(
-            quat.from_euler(t_euler, order), order
-        )  # have euler in the same "form"
+        t2_euler = quat.to_euler(quat.from_euler(t_euler, order), order)  # have euler in the same "form"
         t2_euler_t = quat_torch.to_euler(quat_torch.from_euler(t_euler_t, order), order)
         assert_allclose(t_euler, t2_euler, atol=self.low_atol)
         assert_allclose(t_euler_t.numpy(), t2_euler_t.numpy(), atol=self.low_atol)
@@ -453,17 +452,13 @@ class TestQuat:
         )
         assert_allclose(quat.slerp(q1, q2, t), gt, atol=self.atol)
         assert_allclose(
-            quat_torch.slerp(
-                torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t)
-            ).numpy(),
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t)).numpy(),
             gt,
             atol=self.atol,
         )
         assert_allclose(quat.slerp(q1, q2, t_2), gt_2, atol=self.atol)
         assert_allclose(
-            quat_torch.slerp(
-                torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t_2)
-            ).numpy(),
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), torch.from_numpy(t_2)).numpy(),
             gt_2,
             atol=self.atol,
         )
@@ -492,9 +487,7 @@ class TestQuat:
             atol=self.atol,
         )
 
-        q1 = quat.from_angle_axis(
-            np.array([np.pi / 2]), np.array([0, 1, 1]) / np.sqrt(2)
-        )
+        q1 = quat.from_angle_axis(np.array([np.pi / 2]), np.array([0, 1, 1]) / np.sqrt(2))
         q2 = -q1.copy()
         gt = q1
         assert_allclose(quat.slerp(q1, q2, 0.5), gt, atol=self.low_atol)
@@ -504,13 +497,9 @@ class TestQuat:
             atol=self.low_atol,
         )
         gt = np.array([0.5, 0.0, 0.353553, 0.353553])
+        assert_allclose(quat.slerp(q1, q2, 0.25, shortest=False), gt, atol=self.low_atol)
         assert_allclose(
-            quat.slerp(q1, q2, 0.25, shortest=False), gt, atol=self.low_atol
-        )
-        assert_allclose(
-            quat_torch.slerp(
-                torch.from_numpy(q1), torch.from_numpy(q2), 0.25, shortest=False
-            ).numpy(),
+            quat_torch.slerp(torch.from_numpy(q1), torch.from_numpy(q2), 0.25, shortest=False).numpy(),
             gt,
             atol=self.low_atol,
         )

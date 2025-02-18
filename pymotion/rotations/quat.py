@@ -26,7 +26,7 @@ def from_angle_axis(angle: np.array, axis: np.array) -> np.array:
 
     Parameters
     ----------
-    angle : np.array[..., angle]
+    angle : np.array[..., angle] in radians.
     axis : np.array[..., [x,y,z]]
         normalized axis [x,y,z] of rotation
 
@@ -257,10 +257,19 @@ def to_angle_axis(quaternions: np.array) -> np.array:
     axis : np.array[..., [x,y,z]]
         normalized axis [x,y,z] of rotation
     """
-    q = quaternions
-    angle = 2 * np.arccos(q[..., 0:1])
-    s = np.sqrt(1 - q[..., 0:1] * q[..., 0:1])
-    return angle, q[..., 1:] / s
+    w = quaternions[..., 0]
+    xyz = quaternions[..., 1:]
+
+    angle = 2 * np.arccos(np.clip(w, -1.0, 1.0))
+    s = np.sqrt(np.clip(1.0 - w * w, 0.0, 1.0))
+
+    # Avoid division by zero when s is close to zero (identity quaternion)
+    axis = np.zeros_like(xyz)
+    mask = s > 1e-8
+    if mask.any():
+        axis[mask] = xyz[mask] / np.expand_dims(s[mask], axis=-1)
+
+    return angle[..., None], axis
 
 
 def to_matrix(quaternions: np.array) -> np.array:

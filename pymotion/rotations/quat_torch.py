@@ -28,7 +28,7 @@ def from_angle_axis(angle: torch.Tensor, axis: torch.Tensor) -> torch.Tensor:
 
     Parameters
     ----------
-    angle : torch.Tensor[..., angle]
+    angle : torch.Tensor[..., angle] in radians.
     axis : torch.Tensor[..., [x,y,z]]
         normalized axis [x,y,z] of rotation
 
@@ -270,10 +270,19 @@ def to_angle_axis(quaternions: torch.Tensor) -> torch.Tensor:
     axis : torch.Tensor[..., [x,y,z]]
         normalized axis [x,y,z] of rotation
     """
-    q = quaternions
-    angle = 2 * torch.arccos(q[..., 0:1])
-    s = torch.sqrt(1 - q[..., 0:1] * q[..., 0:1])
-    return angle, q[..., 1:] / s
+    w = quaternions[..., 0]
+    xyz = quaternions[..., 1:]
+
+    angle = 2 * torch.arccos(torch.clip(w, -1.0, 1.0))
+    s = torch.sqrt(torch.clamp(1.0 - w * w, min=0.0))
+
+    # Avoid division by zero when s is close to zero (identity quaternion)
+    axis = torch.zeros_like(xyz)
+    mask = s > 1e-8
+    if mask.any():
+        axis[mask] = xyz[mask] / s[mask].unsqueeze(-1)
+
+    return angle.unsqueeze(-1), axis
 
 
 def to_matrix(quaternions: torch.Tensor) -> torch.Tensor:
