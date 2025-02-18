@@ -298,6 +298,7 @@ Features will be added when new operations or rotation representations are neede
 - Extend documentation and add examples in the description of each function.
 - Include new animation importers such as FBX
 - Improve the usability of the Blender visualization workflow
+- Develop a new high-performance Viewer for real-time visualization
 - Include useful operations for data augmentation such as animation mirroring
 - Create an Inverse Kinematics module
 
