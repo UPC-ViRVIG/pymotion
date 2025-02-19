@@ -1,5 +1,6 @@
 from __future__ import annotations
 import numpy as np
+import pymotion.ops.vector as vec
 
 
 def from_scaled_angle_axis(scaledaxis: np.array) -> np.array:
@@ -269,7 +270,7 @@ def to_angle_axis(quaternions: np.array) -> np.array:
     if mask.any():
         axis[mask] = xyz[mask] / np.expand_dims(s[mask], axis=-1)
 
-    return angle[..., None], axis
+    return angle[..., np.newaxis], axis
 
 
 def to_matrix(quaternions: np.array) -> np.array:
@@ -498,6 +499,155 @@ def slerp(q0: np.array, q1: np.array, t: float | np.array, shortest: bool = True
     q2 /= np.linalg.norm(q2 + 0.000001, axis=-1, keepdims=True)  # {q0, q2} is now an orthonormal basis
 
     return np.cos(theta) * q0 + np.sin(theta) * q2
+
+
+def from_to(v1: np.ndarray, v2: np.ndarray, normalize_input: bool = True) -> np.ndarray:
+    """
+    Calculate the quaternion that rotates direction v1 to direction v2.
+    When v1 and v2 are parallel, the result is the identity quaternion.
+
+    Parameters
+    ----------
+    v1, v2 : np.array[..., [x,y,z]]
+        Input vectors representing directions.
+    normalize_input : bool
+        Whether to normalize the input vectors.
+
+    Returns
+    -------
+    rot : np.array[..., [w,x,y,z]]
+        Quaternion representing the rotation.
+    """
+    assert v1.shape[-1] == 3 and v2.shape[-1] == 3, "Input vectors must have shape [..., 3]"
+    assert v1.shape == v2.shape, "Input vectors must have the same shape"
+
+    if normalize_input:
+        v1_norm = vec.normalize(v1)
+        v2_norm = vec.normalize(v2)
+    else:
+        v1_norm = v1
+        v2_norm = v2
+
+    if v1.ndim == 1:
+        v1_norm = v1_norm[np.newaxis, :]
+        v2_norm = v2_norm[np.newaxis, :]
+
+    # Calculate cross product and dot product
+    cross = np.cross(v1_norm, v2_norm)
+    dot = np.sum(v1_norm * v2_norm, axis=-1, keepdims=True)
+
+    # Handle general case
+    axis_rot = normalize(cross)
+    w = np.sqrt((1 + dot) * 0.5)  # cos(theta/2) = sqrt((1 + dot) / 2)
+    s = np.sqrt((1 - dot) * 0.5)  # sin(theta/2) = sqrt((1 - dot) / 2)
+    rot = np.concatenate([w, axis_rot * s], axis=-1)
+
+    # Handle parallel vectors (dot ≈ 1)
+    parallel = np.isclose(dot, 1.0)
+    rot[parallel[..., 0]] = [1.0, 0.0, 0.0, 0.0]
+
+    # Handle anti-parallel vectors (dot ≈ -1)
+    anti_parallel_mask = np.isclose(dot, -1.0)[..., 0]
+
+    if np.any(anti_parallel_mask):  # Check if any anti-parallel vectors exist
+        v1_anti_parallel = v1_norm[anti_parallel_mask]  # Extract anti-parallel v1 vectors
+
+        # Vectorized orthogonal vector selection
+        orthogonal_anti_parallel = np.empty_like(v1_anti_parallel)  # Initialize with correct shape
+        condition_mask = np.isclose(np.abs(v1_anti_parallel[..., 0]), 1.0)  # Boolean mask
+
+        orthogonal_anti_parallel[condition_mask] = np.array([0.0, 1.0, 0.0])  # Assign for True condition
+        orthogonal_anti_parallel[~condition_mask] = np.array([1.0, 0.0, 0.0])  # Assign for False condition
+
+        # Vectorized axis of rotation calculation
+        axis_rot_anti_parallel = normalize(np.cross(v1_anti_parallel, orthogonal_anti_parallel))
+
+        # Vectorized quaternion construction for anti-parallel case
+        rot_correction_anti_parallel = np.concatenate(
+            [np.zeros_like(axis_rot_anti_parallel[..., :1]), axis_rot_anti_parallel], axis=-1
+        )
+
+        # Vectorized assignment of corrections
+        rot[anti_parallel_mask] = rot_correction_anti_parallel
+
+    if v1.ndim == 1:
+        rot = rot[0]
+
+    return rot
+
+
+def from_to_axis(
+    v1: np.ndarray, v2: np.ndarray, rot_axis: np.ndarray, normalize_input: bool = True
+) -> np.ndarray:
+    """
+    Calculate the quaternion that rotates direction v1 to direction v2.
+    The rotation axis is fixed to the provided axis.
+    When v1 and v2 are parallel, the result is the identity quaternion.
+
+    Parameters
+    ----------
+    v1, v2 : np.array[..., [x,y,z]]
+        Input vectors representing directions.
+    axis : np.array[..., [x,y,z]]
+        Fixed rotation axis.
+    normalize_input : bool
+        Whether to normalize the input vectors.
+
+    Returns
+    -------
+    rot : np.array[..., [w,x,y,z]]
+        Quaternion representing the rotation.
+    """
+    assert v1.shape[-1] == 3 and v2.shape[-1] == 3, "Input vectors must have shape [..., 3]"
+    assert v1.shape == v2.shape, "Input vectors must have the same shape"
+    assert v1.shape == rot_axis.shape, "Input vectors and rotation axis must have the same shape"
+
+    if rot_axis.ndim == 1:
+        rot_axis = rot_axis[np.newaxis, :]
+
+    if normalize_input:
+        v1_norm = vec.normalize(v1)
+        v2_norm = vec.normalize(v2)
+    else:
+        v1_norm = v1
+        v2_norm = v2
+
+    if v1.ndim == 1:
+        v1_norm = v1_norm[np.newaxis, :]
+        v2_norm = v2_norm[np.newaxis, :]
+
+    # Calculate cross product and dot product
+    cross = np.cross(v1_norm, v2_norm)
+    dot = np.sum(v1_norm * v2_norm, axis=-1, keepdims=True)
+
+    # Handle general case
+    w = np.sqrt((1 + dot) * 0.5)  # cos(theta/2) = sqrt((1 + dot) / 2)
+    s = np.sqrt((1 - dot) * 0.5)  # sin(theta/2) = sqrt((1 - dot) / 2)
+    # Adjust sign of s based on cross product and rot_axis
+    cross_dot_axis = np.sum(cross * rot_axis, axis=-1, keepdims=True)
+    s *= np.sign(cross_dot_axis)  # Correct sign based on alignment
+    # Combine w and s to form quaternion
+    rot = np.concatenate([w, rot_axis * s], axis=-1)
+
+    # Handle parallel vectors (dot ≈ 1)
+    parallel = np.isclose(dot, 1.0)
+    rot[parallel[..., 0]] = [1.0, 0.0, 0.0, 0.0]
+
+    # Handle anti-parallel vectors (dot ≈ -1)
+    anti_parallel = np.isclose(dot, -1.0)
+    anti_parallel_rotmask = np.tile(anti_parallel, (1,) * (rot.ndim - 1) + (4,))
+    anti_parallel_rotaxismask = np.tile(anti_parallel, (1,) * (rot_axis.ndim - 1) + (3,))
+    rots_anti_parallel = rot[anti_parallel_rotmask]
+    rots_anti_parallel[::4] = 0
+    rots_anti_parallel[[False, True, True, True] * (len(rots_anti_parallel) // 4)] = rot_axis[
+        anti_parallel_rotaxismask
+    ]
+    rot[anti_parallel_rotmask] = rots_anti_parallel
+
+    if v1.ndim == 1:
+        rot = rot[0]
+
+    return rot
 
 
 def _fast_cross(a: np.array, b: np.array) -> np.array:

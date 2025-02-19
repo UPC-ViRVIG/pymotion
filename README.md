@@ -232,6 +232,54 @@ local_rotations = sixd.to_quat(continuous)
 </details>
 
 <details>
+<summary> Skeleton local rotations from root-centered positions </summary> <br/>
+
+**NumPy**
+```python
+import numpy as np
+from pymotion.io.bvh import BVH
+from pymotion.ops.forward_kinematics import fk
+from pymotion.ops.skeleton import from_root_positions
+
+bvh = BVH()
+bvh.load("test.bvh")
+local_rotations, local_positions, parents, offsets, _, _ = bvh.get_data()
+pos, _ = fk(local_rotations, np.zeros((local_positions.shape[0], 3)), offsets, parents)
+
+pred_rots = from_root_positions(pos, parents, offsets)
+
+bvh.set_data(pred_rots, local_positions)
+bvh.save("test_out.bvh")  # joint positions should be similar as test.bvh
+```
+
+**PyTorch**
+```python
+import torch
+from pymotion.io.bvh import BVH
+from pymotion.ops.forward_kinematics_torch import fk
+from pymotion.ops.skeleton_torch import from_root_positions
+
+bvh = BVH()
+bvh.load("test.bvh")
+local_rotations, local_positions, parents, offsets, _, _ = bvh.get_data()
+offsets = torch.from_numpy(offsets)
+parents = torch.from_numpy(parents)
+pos, _ = fk(
+    torch.from_numpy(local_rotations),
+    torch.zeros((local_positions.shape[0], 3)),
+    offsets,
+    parents,
+)
+
+pred_rots = from_root_positions(pos, parents, offsets)
+
+bvh.set_data(pred_rots.numpy(), local_positions)
+bvh.save("test_out.bvh")  # joint positions should be similar as test.bvh
+```
+
+</details>
+
+<details>
 <summary> Visualize motion in Python </summary> <br/>
 
 ```python

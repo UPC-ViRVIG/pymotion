@@ -9,9 +9,7 @@ The first 4 elements are the real part and the last 4 elements are the dual part
 """
 
 
-def from_rotation_translation(
-    rotations: torch.Tensor, translations: torch.Tensor
-) -> torch.Tensor:
+def from_rotation_translation(rotations: torch.Tensor, translations: torch.Tensor) -> torch.Tensor:
     """
     Convert the rotations (quaternions) and translation (3D vectors) information to dual quaternions.
 
@@ -31,7 +29,7 @@ def from_rotation_translation(
     # dual part of dual quaternions represent translations
     # t is a pure quaternion (0, x, y, z)
     # q_d = 0.5 * eps * t * q_r
-    t = torch.zeros((translations.shape[:-1] + (4,))).to(rotations.device)
+    t = torch.zeros((translations.shape[:-1] + (4,)), device=rotations.device, dtype=rotations.dtype)
     t[..., 1:] = translations
     q_d = 0.5 * quat.mul(t, q_r)
     dq = torch.cat((q_r, q_d), dim=-1)
@@ -50,7 +48,9 @@ def from_translation(translations: torch.Tensor) -> torch.Tensor:
     -------
     dual_quats : torch.Tensor[..., 8]
     """
-    dual_quats = torch.zeros((translations.shape[:-1] + (8,))).to(translations.device)
+    dual_quats = torch.zeros(
+        (translations.shape[:-1] + (8,)), device=translations.device, dtype=translations.dtype
+    )
     # real part of dual quaternions represent rotations
     # and is represented as a conventional unit quaternion
     dual_quats[..., 0:1] = 1
@@ -131,12 +131,10 @@ def is_unit(dq: torch.Tensor, atol: float = 1e-03) -> bool:
     q_r = dq[..., :4]
     q_d = dq[..., 4:]
     sqr_norm_q_r = torch.sum(q_r * q_r, dim=-1)
-    if torch.isclose(
-        sqr_norm_q_r, torch.zeros(sqr_norm_q_r.shape, device=dq.device)
-    ).all():
+    if torch.isclose(sqr_norm_q_r, torch.zeros(sqr_norm_q_r.shape, device=dq.device, dtype=dq.dtype)).all():
         return True
     rot_normalized = torch.isclose(
-        sqr_norm_q_r, torch.ones(sqr_norm_q_r.shape, device=dq.device)
+        sqr_norm_q_r, torch.ones(sqr_norm_q_r.shape, device=dq.device, dtype=dq.dtype)
     ).all()
     sqr_norm_q_d = torch.sum(q_r * q_d, dim=-1)
     trans_normalized = torch.isclose(

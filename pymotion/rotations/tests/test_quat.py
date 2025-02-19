@@ -503,3 +503,319 @@ class TestQuat:
             gt,
             atol=self.low_atol,
         )
+
+    def test_from_to_numpy(self):
+        # Multidimensional Identity case (3D input)
+        v1_np_id = np.array(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]], dtype=np.float32
+        )  # (2, 3, 3) shaped v1
+        v2_np_id = np.array(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]], dtype=np.float32
+        )  # (2, 3, 3) shaped v2
+        gt_quat_np_id = np.array(
+            [[[1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0]], [[1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0]]],
+            dtype=np.float32,
+        )  # (2, 3, 4) shaped gt_quat
+        rot_np_id = quat.from_to(v1_np_id, v2_np_id)
+        assert_allclose(
+            rot_np_id,
+            gt_quat_np_id,
+            atol=self.atol,
+            err_msg="from_to NumPy: Multidimensional Identity case failed",
+        )
+
+        # 90 degree rotation around X
+        v1_np_90 = np.array([[[1, 0, 0]]], dtype=np.float32)
+        v2_np_90 = np.array([[[0, 1, 0]]], dtype=np.float32)
+        gt_quat_np_90 = np.array([[[0.70710678, 0, 0, 0.70710678]]], dtype=np.float32)
+        rot_np_90 = quat.from_to(v1_np_90, v2_np_90)
+        assert_allclose(
+            rot_np_90,
+            gt_quat_np_90,
+            atol=self.atol,
+            err_msg="quat from_to: 90 degree + multidimensional case NumPy failed",
+        )
+
+        # 180 degree rotation (anti-parallel)
+        v1_np_180 = np.array([1, 0, 0], dtype=np.float32)
+        v2_np_180 = np.array([-1, 0, 0], dtype=np.float32)
+        gt_quat_np_180 = np.array([0, 0, 0, 1], dtype=np.float32)
+        rot_np_180 = quat.from_to(v1_np_180, v2_np_180)
+        assert_allclose(
+            np.abs(rot_np_180),
+            np.abs(gt_quat_np_180),
+            atol=self.atol,
+            err_msg="quat from_to: 180 degree case NumPy failed",
+        )
+
+        # Multidimensional 180 degree rotation (anti-parallel)
+        v1_np_180 = np.array(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]], dtype=np.float32
+        )
+        v2_np_180 = np.array(
+            [[[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]], [[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]]], dtype=np.float32
+        )
+        gt_quat_np_180 = np.array(
+            [[[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]], [[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]]],
+            dtype=np.float32,
+        )
+        rot_np_180 = quat.from_to(v1_np_180, v2_np_180)
+        assert_allclose(
+            np.abs(rot_np_180),
+            np.abs(gt_quat_np_180),
+            atol=self.atol,
+            err_msg="multidimensional quat from_to: 180 degree case NumPy failed",
+        )
+
+        # Random vectors
+        np.random.seed(0)  # for reproducibility
+        v1_np_rand = np.random.rand(1000, 3).astype(np.float32)
+        v2_np_rand = np.random.rand(1000, 3).astype(np.float32)
+        rot_np_rand = quat.from_to(v1_np_rand, v2_np_rand)
+        for i in range(1000):
+            v1_rotated_np = quat.mul_vec(rot_np_rand[i], v1_np_rand[i])
+            v1_rotated_np_norm = v1_rotated_np / np.linalg.norm(v1_rotated_np)
+            v2_np_rand_norm = v2_np_rand[i] / np.linalg.norm(v2_np_rand[i])
+            assert_allclose(
+                v1_rotated_np_norm,
+                v2_np_rand_norm,
+                atol=self.low_atol,
+                err_msg=f"quat from_to: Random vectors case NumPy failed for index {i}",
+            )
+
+    def test_from_to_torch(self):
+        # Multidimensional Identity case (3D input)
+        v1_torch_id = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            ]
+        ).float()  # (2, 3, 3) shaped v1
+        v2_torch_id = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            ]
+        ).float()  # (2, 3, 3) shaped v2
+        gt_quat_torch_id = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+            ]
+        ).float()  # (2, 3, 4) shaped gt_quat
+        rot_torch_id = quat_torch.from_to(v1_torch_id, v2_torch_id)  # rot_axis (3,) should broadcast
+        assert_allclose(
+            rot_torch_id.numpy(),
+            gt_quat_torch_id.numpy(),
+            atol=self.atol,
+            err_msg="from_to_torch: Multidimensional Identity case PyTorch failed",
+        )
+
+        # 90 degree rotation around X
+        v1_torch_90 = torch.tensor([[[1.0, 0.0, 0.0]]]).float()
+        v2_torch_90 = torch.tensor([[[0.0, 1.0, 0.0]]]).float()
+        gt_quat_torch_90 = torch.tensor([[[0.70710678, 0.0, 0.0, 0.70710678]]]).float()
+        rot_torch_90 = quat_torch.from_to(v1_torch_90, v2_torch_90)
+        assert_allclose(
+            rot_torch_90.numpy(),
+            gt_quat_torch_90.numpy(),
+            atol=self.atol,
+            err_msg="quat_torch from_to: 90 degree + multidimensional case PyTorch failed",
+        )
+
+        # 180 degree rotation (anti-parallel)
+        v1_torch_180 = torch.tensor([1.0, 0.0, 0.0]).float()
+        v2_torch_180 = torch.tensor([-1.0, 0.0, 0.0]).float()
+        gt_quat_torch_180 = torch.tensor([0.0, 0.0, 0.0, 1.0]).float()
+        rot_torch_180 = quat_torch.from_to(v1_torch_180, v2_torch_180)
+        assert_allclose(
+            torch.abs(rot_torch_180).numpy(),
+            torch.abs(gt_quat_torch_180).numpy(),
+            atol=self.atol,
+            err_msg="quat_torch from_to: 180 degree case PyTorch failed",
+        )
+
+        # Multidimensional 180 degree rotation (anti-parallel)
+        v1_torch_180 = torch.tensor(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]]
+        ).float()
+        v2_torch_180 = torch.tensor(
+            [[[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]], [[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]]]
+        ).float()
+        gt_quat_torch_180 = torch.tensor(
+            [[[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]], [[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]]]
+        ).float()
+        rot_torch_180 = quat_torch.from_to(v1_torch_180, v2_torch_180)
+        assert_allclose(
+            np.abs(rot_torch_180),
+            np.abs(gt_quat_torch_180),
+            atol=self.atol,
+            err_msg="multidimensional quat from_to: 180 degree case PyTorch failed",
+        )
+
+        # Random vectors
+        torch.manual_seed(0)  # for reproducibility
+        v1_torch_rand = torch.rand(1000, 3).float()
+        v2_torch_rand = torch.rand(1000, 3).float()
+        rot_torch_rand = quat_torch.from_to(v1_torch_rand, v2_torch_rand)
+        for i in range(1000):
+            v1_rotated_torch = quat_torch.mul_vec(rot_torch_rand[i], v1_torch_rand[i])
+            v1_rotated_torch_norm = v1_rotated_torch / torch.linalg.norm(v1_rotated_torch)
+            v2_torch_rand_norm = v2_torch_rand[i] / torch.linalg.norm(v2_torch_rand[i])
+            assert_allclose(
+                v1_rotated_torch_norm.numpy(),
+                v2_torch_rand_norm.numpy(),
+                atol=self.low_atol,
+                err_msg=f"quat_torch from_to: Random vectors case PyTorch failed for index {i}",
+            )
+
+    def test_from_to_axis_numpy(self):
+        rot_axis_np = np.array([0, 0, 1], dtype=np.float32)
+        rot_axis_np_2 = np.array([[[0, 0, 1]]], dtype=np.float32)
+        rot_axis_np_3 = np.array(
+            [[[0, 0, 1], [0, 0, 1], [0, 0, 1]], [[0, 0, 1], [0, 0, 1], [0, 0, 1]]], dtype=np.float32
+        )
+
+        # Multidimensional Identity case (3D input)
+        v1_np_id = np.array(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]], dtype=np.float32
+        )  # (2, 3, 3) shaped v1
+        v2_np_id = np.array(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]], dtype=np.float32
+        )  # (2, 3, 3) shaped v2
+        gt_quat_np_id = np.array(
+            [[[1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0]], [[1, 0, 0, 0], [1, 0, 0, 0], [1, 0, 0, 0]]],
+            dtype=np.float32,
+        )  # (2, 3, 4) shaped gt_quat
+        rot_np_id = quat.from_to_axis(
+            v1_np_id,
+            v2_np_id,
+            rot_axis_np_3,
+        )
+        assert_allclose(
+            rot_np_id,
+            gt_quat_np_id,
+            atol=self.atol,
+            err_msg="from_to_axis NumPy: Multidimensional Identity case failed",
+        )
+
+        # 90 degree rotation around Z axis (rot_axis)
+        v1_np_90 = np.array([[[1, 0, 0]]], dtype=np.float32)
+        v2_np_90 = np.array([[[0, 1, 0]]], dtype=np.float32)
+        gt_quat_np_90 = np.array([[[0.70710678, 0, 0, 0.70710678]]], dtype=np.float32)
+        rot_np_90 = quat.from_to_axis(v1_np_90, v2_np_90, rot_axis_np_2)
+        assert_allclose(
+            rot_np_90,
+            gt_quat_np_90,
+            atol=self.atol,
+            err_msg="from_to_axis NumPy: 90 degree + multidimensional case failed",
+        )
+
+        # 180 degree rotation around Z axis (rot_axis)
+        v1_np_180 = np.array([1, 0, 0], dtype=np.float32)
+        v2_np_180 = np.array([-1, 0, 0], dtype=np.float32)
+        gt_quat_np_180 = np.array([0, 0, 0, 1], dtype=np.float32)
+        rot_np_180 = quat.from_to_axis(v1_np_180, v2_np_180, rot_axis_np)
+        assert_allclose(
+            np.abs(rot_np_180),
+            np.abs(gt_quat_np_180),
+            atol=self.atol,
+            err_msg="from_to_axis NumPy: 180 degree case failed",
+        )
+
+        # Multidimensional 180 degree rotation (anti-parallel)
+        v1_np_180 = np.array(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]], dtype=np.float32
+        )
+        v2_np_180 = np.array(
+            [[[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]], [[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]]], dtype=np.float32
+        )
+        gt_quat_np_180 = np.array(
+            [[[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]], [[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]]],
+            dtype=np.float32,
+        )
+        rot_np_180 = quat.from_to_axis(v1_np_180, v2_np_180, rot_axis_np_3)
+        assert_allclose(
+            np.abs(rot_np_180),
+            np.abs(gt_quat_np_180),
+            atol=self.atol,
+            err_msg="multidimensional quat from_to_axis: 180 degree case NumPy failed",
+        )
+
+    def test_from_to_axis_torch(self):
+        rot_axis_torch = torch.tensor([0.0, 0.0, 1.0]).float()
+        rot_axis_torch_2 = torch.tensor([[[0.0, 0.0, 1.0]]]).float()
+        rot_axis_torch_3 = torch.tensor(
+            [[[0, 0, 1], [0, 0, 1], [0, 0, 1]], [[0, 0, 1], [0, 0, 1], [0, 0, 1]]]
+        ).float()
+
+        # Multidimensional Identity case (3D input)
+        v1_torch_id = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            ]
+        ).float()  # (2, 3, 3) shaped v1
+        v2_torch_id = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0], [1.0, 0.0, 0.0], [1.0, 0.0, 0.0]],
+            ]
+        ).float()  # (2, 3, 3) shaped v2
+        gt_quat_torch_id = torch.tensor(
+            [
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+                [[1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]],
+            ]
+        ).float()  # (2, 3, 4) shaped gt_quat
+        rot_torch_id = quat_torch.from_to_axis(
+            v1_torch_id, v2_torch_id, rot_axis_torch_3
+        )  # rot_axis (3,) should broadcast
+        assert_allclose(
+            rot_torch_id.numpy(),
+            gt_quat_torch_id.numpy(),
+            atol=self.atol,
+            err_msg="from_to_axis_torch: Multidimensional Identity case PyTorch failed",
+        )
+
+        # 90 degree rotation around Z axis (rot_axis_torch)
+        v1_torch_90 = torch.tensor([[[1.0, 0.0, 0.0]]]).float()
+        v2_torch_90 = torch.tensor([[[0.0, 1.0, 0.0]]]).float()
+        gt_quat_torch_90 = torch.tensor([[[0.70710678, 0.0, 0.0, 0.70710678]]]).float()
+        rot_torch_90 = quat_torch.from_to_axis(v1_torch_90, v2_torch_90, rot_axis_torch_2)
+        assert_allclose(
+            rot_torch_90.numpy(),
+            gt_quat_torch_90.numpy(),
+            atol=self.atol,
+            err_msg="from_to_axis_torch: 90 degree + multidimensional case PyTorch failed",
+        )
+
+        # 180 degree rotation around Z axis (rot_axis_torch)
+        v1_torch_180 = torch.tensor([1.0, 0.0, 0.0]).float()
+        v2_torch_180 = torch.tensor([-1.0, 0.0, 0.0]).float()
+        gt_quat_torch_180 = torch.tensor([0.0, 0.0, 0.0, 1.0]).float()
+        rot_torch_180 = quat_torch.from_to_axis(v1_torch_180, v2_torch_180, rot_axis_torch)
+        assert_allclose(
+            torch.abs(rot_torch_180).numpy(),
+            torch.abs(gt_quat_torch_180).numpy(),
+            atol=self.atol,
+            err_msg="from_to_axis_torch: 180 degree case PyTorch failed",
+        )
+
+        # Multidimensional 180 degree rotation (anti-parallel)
+        v1_torch_180 = torch.tensor(
+            [[[1, 0, 0], [1, 0, 0], [1, 0, 0]], [[1, 0, 0], [1, 0, 0], [1, 0, 0]]]
+        ).float()
+        v2_torch_180 = torch.tensor(
+            [[[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]], [[-1, 0, 0], [-1, 0, 0], [-1, 0, 0]]]
+        ).float()
+        gt_quat_torch_180 = torch.tensor(
+            [[[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]], [[0, 0, 0, 1], [0, 0, 0, 1], [0, 0, 0, 1]]]
+        ).float()
+        rot_torch_180 = quat_torch.from_to_axis(v1_torch_180, v2_torch_180, rot_axis_torch_3)
+        assert_allclose(
+            np.abs(rot_torch_180),
+            np.abs(gt_quat_torch_180),
+            atol=self.atol,
+            err_msg="multidimensional quat from_to_axis: 180 degree case PyTorch failed",
+        )

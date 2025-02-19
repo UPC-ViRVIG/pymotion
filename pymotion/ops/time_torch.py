@@ -40,22 +40,18 @@ def interpolate_positions(
     device = positions.device
 
     # Compute the shapes of the output array
-    positions_shape = (
-        positions.shape[:dim] + (len(sample_times),) + positions.shape[dim + 1 :]
-    )
+    positions_shape = positions.shape[:dim] + (len(sample_times),) + positions.shape[dim + 1 :]
 
     # Init array
-    out_positions = torch.zeros(positions_shape, device=device)
+    out_positions = torch.zeros(positions_shape, device=device, dtype=positions.dtype)
 
     # Compute coefficients for linear interpolation
     idxs = torch.min(
         torch.max(
             torch.searchsorted(original_times, sample_times) - 1,
-            torch.Tensor([0], device=device).expand_as(sample_times).long(),
+            torch.tensor([0], device=device, dtype=torch.long).expand_as(sample_times),
         ),
-        torch.Tensor([original_times.shape[0] - 2], device=device)
-        .expand_as(sample_times)
-        .long(),
+        torch.tensor([original_times.shape[0] - 2], device=device, dtype=torch.long).expand_as(sample_times),
     )
     intervals = original_times[idxs + 1] - original_times[idxs]
     weights = (sample_times - original_times[idxs]) / intervals

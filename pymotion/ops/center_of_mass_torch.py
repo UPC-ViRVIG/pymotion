@@ -43,6 +43,7 @@ def human_center_of_mass(
         + [0.15 / n_joints_left_leg] * n_joints_left_leg
         + [0.15 / n_joints_right_leg] * n_joints_right_leg,
         device=joints_spine.device,
+        dtype=joints_spine.dtype,
     )
     joints = torch.concatenate(
         [joints_spine, joints_left_arm, joints_right_arm, joints_left_leg, joints_right_leg], axis=-2

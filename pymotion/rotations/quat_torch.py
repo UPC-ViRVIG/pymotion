@@ -2,6 +2,7 @@ from __future__ import annotations
 import torch
 import torch.nn.functional as F
 import numpy as np
+import pymotion.ops.vector_torch as vec
 
 
 def from_scaled_angle_axis(scaledaxis: torch.Tensor) -> torch.Tensor:
@@ -515,6 +516,163 @@ def slerp(q0: torch.Tensor, q1: torch.Tensor, t: float | torch.Tensor, shortest:
     q2 /= torch.linalg.norm(q2 + 0.000001, dim=-1, keepdim=True)  # {q0, q2} is now an orthonormal basis
 
     return torch.cos(theta) * q0 + torch.sin(theta) * q2
+
+
+def from_to(v1: torch.Tensor, v2: torch.Tensor, normalize_input: bool = True) -> torch.Tensor:
+    """
+    Calculate the quaternion that rotates direction v1 to direction v2 using PyTorch.
+    When v1 and v2 are parallel, the result is the identity quaternion.
+
+    Parameters
+    ----------
+    v1, v2 : torch.Tensor[..., [x,y,z]]
+        Input vectors representing directions.
+    normalize_input : bool
+        Whether to normalize the input vectors.
+
+    Returns
+    -------
+    rot : torch.Tensor[..., [w,x,y,z]]
+        Quaternion representing the rotation.
+    """
+    assert v1.shape[-1] == 3 and v2.shape[-1] == 3, "Input vectors must have shape [..., 3]"
+    assert v1.shape == v2.shape, "Input vectors must have the same shape"
+
+    if normalize_input:
+        v1_norm = vec.normalize(v1)
+        v2_norm = vec.normalize(v2)
+    else:
+        v1_norm = v1
+        v2_norm = v2
+
+    if v1.ndim == 1:
+        v1_norm = v1_norm.unsqueeze(0)
+        v2_norm = v2_norm.unsqueeze(0)
+
+    # Calculate cross product and dot product
+    cross = torch.linalg.cross(v1_norm, v2_norm)
+    dot = torch.sum(v1_norm * v2_norm, dim=-1, keepdim=True)
+
+    # Handle general case
+    axis_rot = normalize(cross)
+    w = torch.sqrt((1 + dot) * 0.5)  # cos(theta/2) = sqrt((1 + dot) / 2)
+    s = torch.sqrt((1 - dot) * 0.5)  # sin(theta/2) = sqrt((1 - dot) / 2)
+    rot = torch.cat([w, axis_rot * s], dim=-1)
+
+    # Handle parallel vectors (dot ≈ 1)
+    parallel_mask = torch.isclose(dot, torch.tensor(1.0, device=rot.device, dtype=rot.dtype))
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=rot.device, dtype=rot.dtype)
+    rot[parallel_mask[..., 0]] = identity_quat
+
+    # Handle anti-parallel vectors (dot ≈ -1)
+    anti_parallel_mask = torch.isclose(dot, torch.tensor(-1.0, device=rot.device, dtype=rot.dtype))[..., 0]
+
+    if torch.any(anti_parallel_mask):  # Check if any anti-parallel vectors exist
+        v1_anti_parallel = v1_norm[anti_parallel_mask]  # Extract anti-parallel v1 vectors
+
+        # Vectorized orthogonal vector selection
+        orthogonal_anti_parallel = torch.empty_like(v1_anti_parallel)  # Initialize with correct shape
+        condition_mask = torch.isclose(
+            torch.abs(v1_anti_parallel[..., 0]), torch.tensor(1.0, device=rot.device, dtype=rot.dtype)
+        )  # Boolean mask
+
+        orthogonal_anti_parallel[condition_mask] = torch.tensor(
+            [0.0, 1.0, 0.0], device=rot.device, dtype=rot.dtype
+        )  # Assign for True condition
+        orthogonal_anti_parallel[~condition_mask] = torch.tensor(
+            [1.0, 0.0, 0.0], device=rot.device, dtype=rot.dtype
+        )  # Assign for False condition
+
+        # Vectorized axis of rotation calculation
+        axis_rot_anti_parallel = normalize(torch.linalg.cross(v1_anti_parallel, orthogonal_anti_parallel))
+
+        # Vectorized quaternion construction for anti-parallel case
+        rot_correction_anti_parallel = torch.cat(
+            [torch.zeros_like(axis_rot_anti_parallel[..., :1]), axis_rot_anti_parallel], dim=-1
+        )
+
+        # Vectorized assignment of corrections
+        rot[anti_parallel_mask] = rot_correction_anti_parallel
+
+    if v1.ndim == 1:
+        rot = rot.squeeze(0)
+
+    return rot
+
+
+def from_to_axis(
+    v1: torch.Tensor, v2: torch.Tensor, rot_axis: torch.Tensor, normalize_input: bool = True
+) -> torch.Tensor:
+    """
+    Calculate the quaternion that rotates direction v1 to direction v2.
+    The rotation axis is fixed to the provided axis.
+    When v1 and v2 are parallel, the result is the identity quaternion.
+
+    Parameters
+    ----------
+    v1, v2 : torch.Tensor[..., [x,y,z]]
+        Input vectors representing directions.
+    rot_axis : torch.Tensor[..., [x,y,z]]
+        Fixed rotation axis.
+    normalize_input : bool
+        Whether to normalize the input vectors.
+
+    Returns
+    -------
+    rot : torch.Tensor[..., [w,x,y,z]]
+        Quaternion representing the rotation.
+    """
+    assert v1.shape[-1] == 3 and v2.shape[-1] == 3, "Input vectors must have shape [..., 3]"
+    assert v1.shape == v2.shape, "Input vectors must have the same shape"
+    assert v1.shape == rot_axis.shape, "Input vectors must have the same shape"
+
+    if rot_axis.ndim == 1:
+        rot_axis = rot_axis.unsqueeze(0)
+
+    if normalize_input:
+        v1_norm = vec.normalize(v1)
+        v2_norm = vec.normalize(v2)
+    else:
+        v1_norm = v1
+        v2_norm = v2
+
+    if v1.ndim == 1:
+        v1_norm = v1_norm.unsqueeze(0)
+        v2_norm = v2_norm.unsqueeze(0)
+
+    # Calculate cross product and dot product
+    cross = torch.cross(v1_norm, v2_norm, dim=-1)
+    dot = torch.sum(v1_norm * v2_norm, dim=-1, keepdim=True)
+
+    # Handle general case
+    w = torch.sqrt((1 + dot) * 0.5)  # cos(theta/2) = sqrt((1 + dot) / 2)
+    s = torch.sqrt((1 - dot) * 0.5)  # sin(theta/2) = sqrt((1 - dot) / 2)
+    # Adjust sign of s based on cross product and rot_axis
+    cross_dot_axis = torch.sum(cross * rot_axis, dim=-1, keepdim=True)
+    s *= torch.sign(cross_dot_axis)  # Correct sign based on alignment
+    # Combine w and s to form quaternion
+    rot = torch.cat([w, rot_axis * s], dim=-1)
+
+    # Handle parallel vectors (dot ≈ 1)
+    parallel_mask = torch.isclose(dot, torch.tensor(1.0, device=rot.device, dtype=rot.dtype))
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=rot.device, dtype=rot.dtype)
+    rot[parallel_mask[..., 0]] = identity_quat
+
+    # Handle anti-parallel vectors (dot ≈ -1)
+    anti_parallel = torch.isclose(dot, torch.tensor(-1.0, device=rot.device, dtype=rot.dtype))
+    anti_parallel_rotmask = torch.tile(anti_parallel, (1,) * (rot.ndim - 1) + (4,))
+    anti_parallel_rotaxismask = torch.tile(anti_parallel, (1,) * (rot_axis.ndim - 1) + (3,))
+    rots_anti_parallel = rot[anti_parallel_rotmask]
+    rots_anti_parallel[::4] = 0
+    rots_anti_parallel[[False, True, True, True] * (len(rots_anti_parallel) // 4)] = rot_axis[
+        anti_parallel_rotaxismask
+    ]
+    rot[anti_parallel_rotmask] = rots_anti_parallel
+
+    if v1.ndim == 1:
+        rot = rot.squeeze(0)
+
+    return rot
 
 
 def _fast_cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:

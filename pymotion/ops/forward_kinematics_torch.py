@@ -34,6 +34,7 @@ def fk(
     mat = torch.zeros(
         rot.shape[:-1] + (4, 4),
         device=device,
+        dtype=rot.dtype,
     )
     mat[..., :3, :3] = quat.to_matrix(quat.normalize(rot))
     mat[..., :3, 3] = offsets

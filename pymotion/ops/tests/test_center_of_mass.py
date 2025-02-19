@@ -39,26 +39,26 @@ class TestCoM:
         )
         assert_allclose(
             center_of_mass_torch(
-                torch.tensor([[[0, 0, 0]]]),
-                torch.tensor([[1]]),
+                torch.tensor([[[0, 0, 0]]]).float(),
+                torch.tensor([[1]]).float(),
             ),
-            torch.tensor([[0, 0, 0]]),
+            torch.tensor([[0, 0, 0]]).float(),
             atol=self.atol,
         )
         assert_allclose(
             center_of_mass_torch(
-                torch.tensor([[[0, 0, 0], [1, 0, 0]]]),
-                torch.tensor([[0.5, 0.5]]),
+                torch.tensor([[[0, 0, 0], [1, 0, 0]]]).float(),
+                torch.tensor([[0.5, 0.5]]).float(),
             ),
-            torch.tensor([[0.5, 0, 0]]),
+            torch.tensor([[0.5, 0, 0]]).float(),
             atol=self.atol,
         )
         assert_allclose(
             center_of_mass_torch(
-                torch.tensor([[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]),
-                torch.tensor([[0.3, 0.3, 0.4]]),
+                torch.tensor([[[1, 2, 3], [4, 5, 6], [7, 8, 9]]]).float(),
+                torch.tensor([[0.3, 0.3, 0.4]]).float(),
             ),
-            torch.tensor([[4.3, 5.3, 6.3]]),
+            torch.tensor([[4.3, 5.3, 6.3]]).float(),
             atol=self.atol,
         )
         assert_allclose(
@@ -73,11 +73,11 @@ class TestCoM:
         )
         assert_allclose(
             human_center_of_mass_torch(
-                torch.tensor([[[2, 1, 5]]]),
-                torch.tensor([[[1, 3, 4]]]),
-                torch.tensor([[[1, 1, 1]]]),
-                torch.tensor([[[0, 7, 6]]]),
-                torch.tensor([[[2, 8, 1]]]),
+                torch.tensor([[[2, 1, 5]]]).float(),
+                torch.tensor([[[1, 3, 4]]]).float(),
+                torch.tensor([[[1, 1, 1]]]).float(),
+                torch.tensor([[[0, 7, 6]]]).float(),
+                torch.tensor([[[2, 8, 1]]]).float(),
             ),
-            torch.tensor([[1.6, 3.05, 4.3]]),
+            torch.tensor([[1.6, 3.05, 4.3]]).float(),
         )

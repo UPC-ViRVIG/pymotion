@@ -1,6 +1,8 @@
 import torch
 import pymotion.rotations.quat_torch as quat
 import pymotion.rotations.dual_quat_torch as dquat
+import pymotion.ops.vector as vec
+from pymotion.ops.forward_kinematics_torch import fk
 
 """
 A skeleton is a set of joints connected by bones.
@@ -9,15 +11,89 @@ The skeleton is defined by:
     - the parents of the joints
     - the local rotations of the joints
     - the global position of the root joint
-
-This functions convert skeletal information to 
-root-centered dual quaternions and vice-versa.
-
-Root-centered dual quaternions are useful when training
-neural networks, as all information is local to the root
-and the neural network does not need to learn the FK function.
-
 """
+
+
+def from_root_positions(
+    positions: torch.Tensor, parents: torch.Tensor, offsets: torch.Tensor
+) -> torch.Tensor:
+    """
+    Convert the root-centered position space joint positions
+    to the skeleton information.
+    Note: The joint positions have the global rotation of the root
+          applied. Only the root translation should be removed.
+
+    Parameters
+    ----------
+    positions : torch.Tensor[frames, n_joints, 3]
+        The root-centered position space (not rotation-relative) joint positions.
+    parents : torch.Tensor[n_joints]
+        The parent of the joint.
+    offsets : torch.Tensor[n_joints, 3]
+        The offset of the joint from its parent.
+
+    Returns
+    -------
+    rotations : torch.Tensory[frames, n_joints, 4]
+        The local rotation of the joint.
+    """
+
+    nFrames = positions.shape[0]
+    nJoints = parents.shape[0]
+
+    # Find all children for each joint:
+    children = [[] for _ in range(nJoints)]
+    for i, parent in enumerate(parents):
+        if i > 0:  # Ensure valid parent index
+            children[parent].append(i)
+
+    # Iterate joints and align directions from the rest pose to the predicted pose
+    rotations = torch.tile(
+        torch.tensor([1.0, 0.0, 0.0, 0.0], device=positions.device, dtype=positions.dtype),
+        (nFrames, nJoints, 1),
+    )
+    for j, children_of_j in enumerate(children):
+        if len(children_of_j) == 0:  # Skip joints with 0 children
+            continue
+
+        # Compute current pose (start with rest pose)
+        pos, rotmats = fk(
+            rotations,
+            torch.zeros((1, 3), device=positions.device, dtype=positions.dtype),
+            offsets,
+            parents,
+        )
+        global_rots = quat.from_matrix(rotmats)
+        # Align current pose to predicted pose based on the first child
+        c = children_of_j[0]
+        rest_dir = pos[:, c] - pos[:, j]
+        rest_dir = quat.mul_vec(quat.inverse(global_rots[:, j]), rest_dir)
+        pred_dir = positions[:, c] - positions[:, j]
+        pred_dir = quat.mul_vec(quat.inverse(global_rots[:, j]), pred_dir)
+        rot = quat.from_to(rest_dir, pred_dir)
+        rotations[:, j] = rot
+
+        # If more than one child, use it for roll correction
+        for gc in children_of_j[1:]:
+            pos, rotmats = fk(
+                rotations,
+                torch.zeros((1, 3), device=positions.device, dtype=positions.dtype),
+                offsets,
+                parents,
+            )
+            global_rots = quat.from_matrix(rotmats)
+            # Align
+            rest_gc_dir = pos[:, gc] - pos[:, j]
+            rest_gc_dir = quat.mul_vec(quat.inverse(global_rots[:, j]), rest_gc_dir)
+            pred_gc_dir = positions[:, gc] - positions[:, j]
+            pred_gc_dir = quat.mul_vec(quat.inverse(global_rots[:, j]), pred_gc_dir)
+            roll_axis = quat.mul_vec(
+                quat.inverse(global_rots[:, j]), vec.normalize(positions[:, c] - positions[:, j])
+            )
+            roll_rot = quat.from_to_axis(rest_gc_dir, pred_gc_dir, roll_axis)
+            rotations[:, j] = quat.mul(rotations[:, j], roll_rot)
+
+    return rotations
 
 
 def from_root_dual_quat(dq: torch.Tensor, parents: torch.Tensor):
@@ -79,7 +155,7 @@ def to_root_dual_quat(
     dual_quat : torch.Tensor[..., n_joints, 8]
         The root-centered dual quaternion representation of the skeleton.
     """
-    assert (offsets[0] == torch.zeros(3)).all()
+    assert (offsets[0] == torch.zeros(3, device=offsets.device, dtype=offsets.dtype)).all()
     n_joints = rotations.shape[1]
     # translations has shape (frames, n_joints, 3)
     rotations = rotations.clone()
@@ -91,8 +167,7 @@ def to_root_dual_quat(
         if parent == 0:  # already in root space
             continue
         translations[..., j, :] = (
-            quat.mul_vec(rotations[..., parent, :], translations[..., j, :])
-            + translations[..., parent, :]
+            quat.mul_vec(rotations[..., parent, :], translations[..., j, :]) + translations[..., parent, :]
         )
         rotations[..., j, :] = quat.mul(rotations[..., parent, :], rotations[..., j, :])
     # convert to dual quaternions
