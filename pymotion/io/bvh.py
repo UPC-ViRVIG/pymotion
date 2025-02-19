@@ -433,6 +433,8 @@ class BVH:
                 end_site_data = data["end_sites"][np.where(data["end_sites_parents"] == i)[0][0]]
             except ValueError:
                 end_site_data = np.zeros(3)
+            except KeyError:
+                end_site_data = np.zeros(3)
             f.write("%sOFFSET %f %f %f\n" % (tab, end_site_data[0], end_site_data[1], end_site_data[2]))
             tab = tab[:-1]
             f.write("%s}\n" % tab)
