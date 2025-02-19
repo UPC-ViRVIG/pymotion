@@ -308,7 +308,7 @@ viewer.run()
 <details>
 <summary> Visualize a pose in Blender </summary> <br/>
 
-1. Open the Test Exitor window in Blender
+1. Open the Text Editor window in Blender
 2. Open the the file ```blender/pymotion_blender.py``` that can be found in this repository
 3. Run the script (Blender will freeze)
 ![Blender script image](docs/img/blender_script.png)
@@ -346,7 +346,6 @@ Features will be added when new operations or rotation representations are neede
 - Extend documentation and add examples in the description of each function.
 - Include new animation importers such as FBX
 - Improve the usability of the Blender visualization workflow
-- Develop a new high-performance Viewer for real-time visualization
 - Include useful operations for data augmentation such as animation mirroring
 - Create an Inverse Kinematics module
 
