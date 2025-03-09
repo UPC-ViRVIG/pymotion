@@ -1,3 +1,30 @@
+import importlib
+
+REQUIRED_PACKAGES = ["plotly", "dash", "dash_bootstrap_components"]
+
+
+def _check_dependencies():
+    missing_packages = []
+    for package in REQUIRED_PACKAGES:
+        try:
+            importlib.import_module(package)
+        except ImportError:
+            missing_packages.append(package)
+
+    if missing_packages:
+        message = (
+            f"The 'pymotion.render.viewer' subpackage requires the following packages to be installed: "
+            f"{', '.join(missing_packages)} \n"
+            f"Please install them using pip: \n"
+            f"pip install upc-pymotion[viewer] \n"
+        )
+        raise ImportError(message)
+
+
+# Call the check when the subpackage is imported
+_check_dependencies()
+
+
 from __future__ import annotations
 import json
 from typing import List, Union
@@ -15,11 +42,11 @@ class Viewer:
     """
 
     def __init__(
-        self, 
-        xy_size: Union[float, List[float]] = 2, 
-        z_size: Union[float, List[float]] = 2, 
-        framerate: int = 60, 
-        use_reloader: bool = False
+        self,
+        xy_size: Union[float, List[float]] = 2,
+        z_size: Union[float, List[float]] = 2,
+        framerate: int = 60,
+        use_reloader: bool = False,
     ) -> None:
         """
         Initializes the Viewer.
@@ -41,7 +68,7 @@ class Viewer:
         self.playing = False  # Flag to indicate if the animation is playing
         self.frametime = 1000 / framerate  # Time between frames in milliseconds
         self.use_reloader = use_reloader
-        
+
         if isinstance(xy_size, list):
             assert len(xy_size) == 2, "if you pass interval, it should contain only 2 values"
             assert xy_size[0] < xy_size[1], "if you pass interval, first value should be less than second"
@@ -54,8 +81,10 @@ class Viewer:
             z_dict = dict(range=[z_size[0], z_size[1]])
         else:
             z_dict = dict(range=[-z_size, z_size])
-            
-        aspect_ratio_value = (z_dict["range"][1] - z_dict["range"][0]) / (xy_dict["range"][1] - xy_dict["range"][0])
+
+        aspect_ratio_value = (z_dict["range"][1] - z_dict["range"][0]) / (
+            xy_dict["range"][1] - xy_dict["range"][0]
+        )
 
         # Create a default Figure
         self.fig = go.Figure()

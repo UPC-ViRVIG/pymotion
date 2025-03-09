@@ -9,8 +9,8 @@ Some features of PyMotion are:
 - A continuous 6D rotation representation, as introduced by [Zhou et al. [2019]](https://doi.org/10.1109/CVPR.2019.00589)
 - A BVH file reader and preprocessor for loading and transforming motion data
 - Skeletal operations such as Forward Kinematics for computing global joint positions from local joint rotations
-- [Beta] A plotly-based visualizer for debugging and visualizing character animation directly in Python
-- [Beta] A blender visualizer for debugging and visualizing character animation
+- A plotly-based visualizer for debugging and visualizing character animation directly in Python
+- [**Experimental**] PyMotion to Blender automatic communication for debugging and visualizing character animation
 - NumPy and PyTorch implementations and tests for all functions
 
 ## Contents
@@ -28,7 +28,7 @@ Some features of PyMotion are:
 pip install upc-pymotion
 ```
 
-3. **[Optional]** Install Plotly and Dash for the visualizer:
+3. **[Optional]** Install Plotly and Dash for the visualizer (no needed for Blender visualization):
 ```bash
 pip install upc-pymotion[viewer]
 ```
@@ -308,32 +308,37 @@ viewer.run()
 <details>
 <summary> Visualize a pose in Blender </summary> <br/>
 
-1. Open the Text Editor window in Blender
-2. Open the the file ```blender/pymotion_blender.py``` that can be found in this repository
-3. Run the script (Blender will freeze)
-![Blender script image](docs/img/blender_script.png)
-
-4. Run the following Python code in a seperate environment:
 ```python
+import numpy as np
 from pymotion.io.bvh import BVH
-from pymotion.ops.forward_kinematics import fk
-from pymotion.visualizer.blender import BlenderConnection
+from pymotion.render.blender import BlenderConnection
 
-bvh = BVH()
-bvh.load("test.bvh")
-
-local_rotations, local_positions, parents, offsets, end_sites, end_sites_parents = bvh.get_data()
-global_positions = local_positions[:, 0, :]  # root joint
-pos, _ = fk(local_rotations, global_positions, offsets, parents)
-
-# Render points
-frame = 0
-conn = BlenderConnection("127.0.0.1", 2222)
-conn.render_points(pos[0])
-conn.close()
+with BlenderConnection() as conn:
+    conn.clear_scene()
+    conn.render_checkerboard_floor()
+    conn.render_points(
+        np.array([[0, -3, 0], [1, 2, 3]]), np.array([[0, 0, 1], [0, 1, 0]]), radius=np.array([[0.25], [0.05]])
+    )
+    conn.render_orientations(
+        np.array([[1, 0, 0, 0], [np.cos(np.pi / 4.0), np.sin(np.pi / 4.0), 0, 0]]),
+        np.array([[0, -3, 0], [1, 2, 3]]),
+        scale=np.array([[0.5], [0.25]]),
+    )
+    # BVH files can be rendered directly from file path
+    path = "test.bvh"
+    conn.render_bvh_from_path(
+        path,
+        np.array([0, 0, 1]),
+        end_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"],
+    )
+    # or by using a BVH object
+    bvh = BVH()
+    path = "test2.bvh"
+    bvh.load(path)
+    conn.render_bvh(
+        bvh, np.array([0, 1, 0]), end_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"]
+    )
 ```
-
-5. Press ESC key in Blender to stop the server
 
 </details>
 
@@ -345,7 +350,6 @@ Features will be added when new operations or rotation representations are neede
 
 - Extend documentation and add examples in the description of each function.
 - Include new animation importers such as FBX
-- Improve the usability of the Blender visualization workflow
 - Include useful operations for data augmentation such as animation mirroring
 - Create an Inverse Kinematics module
 
