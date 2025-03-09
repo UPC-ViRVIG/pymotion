@@ -306,7 +306,7 @@ viewer.run()
 </details>
 
 <details>
-<summary> Visualize a pose in Blender </summary> <br/>
+<summary> Visualize points, orientations and BVH files in Blender </summary> <br/>
 
 ```python
 import numpy as np
