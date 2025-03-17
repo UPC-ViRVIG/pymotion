@@ -68,7 +68,7 @@ bvh.save("test_out.bvh")
 **NumPy**
 ```python
 from pymotion.io.bvh import BVH
-from pymotion.ops.forward_kinematics import fk
+from pymotion.ops.skeleton import fk
 
 bvh = BVH()
 bvh.load("test.bvh")
@@ -81,7 +81,7 @@ pos, rotmats = fk(local_rotations, global_positions, offsets, parents)
 **PyTorch**
 ```python
 from pymotion.io.bvh import BVH
-from pymotion.ops.forward_kinematics_torch import fk
+from pymotion.ops.skeleton_torch import fk
 import torch
 
 bvh = BVH()
@@ -238,7 +238,7 @@ local_rotations = sixd.to_quat(continuous)
 ```python
 import numpy as np
 from pymotion.io.bvh import BVH
-from pymotion.ops.forward_kinematics import fk
+from pymotion.ops.skeleton import fk
 from pymotion.ops.skeleton import from_root_positions
 
 bvh = BVH()
@@ -256,7 +256,7 @@ bvh.save("test_out.bvh")  # joint positions should be similar as test.bvh
 ```python
 import torch
 from pymotion.io.bvh import BVH
-from pymotion.ops.forward_kinematics_torch import fk
+from pymotion.ops.skeleton_torch import fk
 from pymotion.ops.skeleton_torch import from_root_positions
 
 bvh = BVH()
@@ -285,7 +285,7 @@ bvh.save("test_out.bvh")  # joint positions should be similar as test.bvh
 ```python
 from pymotion.render.viewer import Viewer
 from pymotion.io.bvh import BVH
-from pymotion.ops.forward_kinematics import fk
+from pymotion.ops.skeleton import fk
 
 bvh = BVH()
 bvh.load("test.bvh")

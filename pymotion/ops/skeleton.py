@@ -2,7 +2,6 @@ import numpy as np
 import pymotion.rotations.quat as quat
 import pymotion.rotations.dual_quat as dquat
 import pymotion.ops.vector as vec
-from pymotion.ops.forward_kinematics import fk
 
 """
 A skeleton is a set of joints connected by bones.
@@ -12,6 +11,82 @@ The skeleton is defined by:
     - the local rotations of the joints
     - the global position of the root joint
 """
+
+
+def fk(
+    rot: np.array,
+    global_pos: np.array,
+    offsets: np.array,
+    parents: np.array,
+) -> np.array:
+    """
+    Compute forward kinematics for a skeleton.
+    From the local rotations, global position and offsets, compute the
+    positions and rotation matrices of the joints in world space.
+
+    Parameters
+    -----------
+        rot: np.array[..., n_joints, 4]
+        global_pos: np.array[..., 3]
+        offsets: np.array[..., n_joints, 3] or np.array[n_joints, 3]
+        parents: np.array[n_joints]
+
+    Returns
+    --------
+        positions: np.array[..., n_joints, 3]
+            positions of the joints
+        rotmats: np.array[..., 3, 3]. Matrix order: [[r0.x, r0.y, r0.z],
+                                                     [r1.x, r1.y, r1.z],
+                                                     [r2.x, r2.y, r2.z]] where ri is row i.
+            rotation matrices of the joints
+    """
+    # create a homogeneous matrix of shape (..., 4, 4)
+    mat = np.zeros(rot.shape[:-1] + (4, 4))
+    mat[..., :3, :3] = quat.to_matrix(quat.normalize(rot))
+    mat[..., :3, 3] = offsets
+    mat[..., 3, 3] = 1
+    # first joint is global position
+    mat[..., 0, :3, 3] = global_pos
+    # other joints are transformed by the transform matrix
+    for i, parent in enumerate(parents):
+        # root
+        if i == 0:
+            continue
+        mat[..., i, :, :] = np.matmul(
+            mat[..., parent, :, :],
+            mat[..., i, :, :],
+        )
+    positions = mat[..., :3, 3]
+    rotmats = mat[..., :3, :3]
+    return positions, rotmats
+
+
+def from_global_rotations(global_quats: np.array, parents: np.array) -> np.array:
+    """
+    Compute the inverse forward kinematics for a skeleton.
+    From the global rotations and the parents of the joints,
+    compute the local rotations of the joints.
+
+    Parameters
+    -----------
+        global_quats: np.array[..., n_joints, 4]
+        parents: np.array[n_joints]
+
+    Returns
+    --------
+        local_quats: np.array[..., n_joints, 4]
+            local rotations of the joints
+    """
+    local_quats = np.empty_like(global_quats)
+    for i in reversed(range(len(parents))):
+        if i == 0:  # Root joint
+            local_quats[..., i, :] = global_quats[..., i, :]
+        else:
+            local_quats[..., i, :] = quat.mul(
+                quat.inverse(global_quats[..., parents[i], :]), global_quats[..., i, :]
+            )
+
+    return local_quats
 
 
 def from_root_positions(positions: np.array, parents: np.array, offsets: np.array) -> np.array:
