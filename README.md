@@ -280,6 +280,103 @@ bvh.save("test_out.bvh")  # joint positions should be similar as test.bvh
 </details>
 
 <details>
+<summary> Mirroring an animation </summary> <br/>
+
+**NumPy**
+```python
+import numpy as np
+from pymotion.io.bvh import BVH
+from pymotion.ops.skeleton import mirror
+
+bvh = BVH()
+bvh.load("test.bvh")
+
+names = bvh.data["names"].tolist()
+print(names)
+# ['Hips', 'Chest', 'Chest2', 'Chest3', 'Chest4', 'Neck', 'Head', 'RightCollar', 'RightShoulder',
+#  'RightElbow', 'RightWrist', 'LeftCollar', 'LeftShoulder', 'LeftElbow', 'LeftWrist', 'RightHip',
+#  'RightKnee', 'RightAnkle', 'RightToe', 'LeftHip', 'LeftKnee', 'LeftAnkle', 'LeftToe']
+
+joints_mapping = np.array(
+    [
+        (
+            names.index("Left" + n[5:])
+            if n.startswith("Right")
+            else (names.index("Right" + n[4:]) if n.startswith("Left") else names.index(n))
+        )
+        for n in names
+    ]
+)
+
+local_rotations, local_positions, parents, offsets, end_sites, _ = bvh.get_data()
+
+mirrored_local_rots, mirrored_global_pos, mirrored_offsets, _ = mirror(
+    local_rotations,
+    local_positions[:, 0, :],  # global position of the root joint
+    parents,
+    offsets,
+    end_sites,
+    joints_mapping=joints_mapping,  # joints_mapping is only required for mode="symmetry"
+    mode="symmetry",  # other modes: "all" or "positions"
+    axis="X",
+)
+
+local_positions[:, 0, :] = mirrored_global_pos
+bvh.set_data(mirrored_local_rots, local_positions)
+# Uncomment when mode == "all"
+# bvh.data["offsets"] = mirrored_offsets
+bvh.save("test_mirrored.bvh")
+```
+
+**PyTorch**
+```python
+import torch
+from pymotion.io.bvh import BVH
+from pymotion.ops.skeleton_torch import mirror
+
+bvh = BVH()
+bvh.load("test.bvh")
+
+names = bvh.data["names"].tolist()
+print(names)
+# ['Hips', 'Chest', 'Chest2', 'Chest3', 'Chest4', 'Neck', 'Head', 'RightCollar', 'RightShoulder',
+#  'RightElbow', 'RightWrist', 'LeftCollar', 'LeftShoulder', 'LeftElbow', 'LeftWrist', 'RightHip',
+#  'RightKnee', 'RightAnkle', 'RightToe', 'LeftHip', 'LeftKnee', 'LeftAnkle', 'LeftToe']
+
+joints_mapping = torch.Tensor(
+    [
+        (
+            names.index("Left" + n[5:])
+            if n.startswith("Right")
+            else (names.index("Right" + n[4:]) if n.startswith("Left") else names.index(n))
+        )
+        for n in names
+    ]
+).to(torch.int32)
+
+local_rotations, local_positions, parents, offsets, end_sites, _ = bvh.get_data()
+
+mirrored_local_rots, mirrored_global_pos, mirrored_offsets, _ = mirror(
+    torch.from_numpy(local_rotations),
+    torch.from_numpy(local_positions[:, 0, :]),  # global position of the root joint
+    torch.from_numpy(parents),
+    torch.from_numpy(offsets),
+    torch.from_numpy(end_sites),
+    joints_mapping=joints_mapping,  # joints_mapping is only required for mode="symmetry"
+    mode="symmetry",  # other modes: "all" or "positions"
+    axis="X",
+)
+
+local_positions[:, 0, :] = mirrored_global_pos.numpy()
+bvh.set_data(mirrored_local_rots.numpy(), local_positions)
+# Uncomment when mode == "all"
+# bvh.data["offsets"] = mirrored_offsets.numpy()
+bvh.save("test_mirrored.bvh")
+```
+
+</details>
+
+<details>
 <summary> Visualize motion in Python </summary> <br/>
 
 ```python
@@ -350,7 +447,7 @@ Features will be added when new operations or rotation representations are neede
 
 - Extend documentation and add examples in the description of each function.
 - Include new animation importers such as FBX
-- Include useful operations for data augmentation such as animation mirroring
+- Include useful operations for data augmentation such as *animation mirroring (done)*, noise addition, temporal warping, etc.
 - Create an Inverse Kinematics module
 
 ## License

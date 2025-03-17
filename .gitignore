@@ -1,5 +1,6 @@
 test.bvh
 test_out.bvh
+test_mirrored.bvh
 test.py
 
 # Created by https://www.toptal.com/developers/gitignore/api/python,visualstudiocode

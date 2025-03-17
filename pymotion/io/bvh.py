@@ -375,10 +375,6 @@ class BVH:
             local rotations (quaternions).
         pos : np.array[n_frames, n_joints, 3]
             local positions.
-        parents : np.array[int]
-            ith-element contain the parent of the ith joint.
-        offsets : np.array[n_joints, 3]
-            ith-element contain the offset of ith-joint wrt. its parent joint.
         """
         assert (
             self.data is not None

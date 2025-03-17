@@ -83,13 +83,17 @@ def from_global_rotations(global_quats: torch.Tensor, parents: torch.Tensor) -> 
             local rotations of the joints
     """
     local_quats = torch.empty_like(global_quats)
-    for i in reversed(range(len(parents))):
-        if i == 0:  # Root joint
-            local_quats[..., i, :] = global_quats[..., i, :]
-        else:
-            local_quats[..., i, :] = quat.mul(
-                quat.inverse(global_quats[..., parents[i], :]), global_quats[..., i, :]
-            )
+
+    # Root joint remains the same
+    local_quats[..., 0, :] = global_quats[..., 0, :]
+
+    # Precompute inverse of parent rotations
+    parent_quats = global_quats[..., parents[1:], :]
+    inverse_parent_quats = quat.inverse(parent_quats)
+
+    # Apply inverse parent rotations to child rotations
+    child_quats = global_quats[..., 1:, :]
+    local_quats[..., 1:, :] = quat.mul(inverse_parent_quats, child_quats)
 
     return local_quats
 
@@ -253,3 +257,177 @@ def to_root_dual_quat(
     # convert to dual quaternions
     dual_quat = dquat.from_rotation_translation(rotations, translations)
     return dual_quat
+
+
+def mirror(
+    local_rotations: torch.Tensor,
+    global_translation: torch.Tensor,
+    parents: torch.Tensor,
+    offsets: torch.Tensor,
+    end_sites: torch.Tensor = None,
+    joints_mapping: torch.Tensor = None,
+    mode: str = "all",
+    axis: str = "X",
+):
+    """
+    Mirror a skeleton along the X axis. Different modes are available depending on the parameter 'mode'.
+    if mode == 'symmetry':
+        joints_mapping must be provided, e.g., [0, 1, 3, 2] where 0 and 1 (spine joints) are not swapped, 3 (right joint) and 2 (left joint) are swapped.
+        The topology is not changed, and the joints are mirrored according to the mapping.
+        The skeleton must be symmetric w.r.t. the X axis in the reference pose.
+    if mode == 'all':
+        This is a perfect mirror, but the topology is also mirrored. joints_mapping is not required.
+    if mode == 'positions':
+        Positions are mirrored and inverse kinematics is used to compute the local rotations.
+        The topology is not mirrored, but the twist of the joints is not preserved. joints_mapping is not required.
+
+    Parameters
+    ----------
+    local_rotations : torch.Tensor[..., n_joints, 4]
+        The local rotations of the joints.
+    global_translation : torch.Tensor[..., 3]
+        The global translation of the root joint.
+    parents : torch.Tensor[n_joints]
+        The parent of the joint.
+    offsets : torch.Tensor[n_joints, 3]
+        The offset of the joint from its parent.
+    end_sites : torch.Tensor[n_end_sites, 3]
+        The end sites of the skeleton.
+    joints_mapping : torch.Tensor
+        The mapping of the joints to mirror. Only required for mode == 'symmetry'.
+        joints_mapping must be provided, e.g., [0, 1, 3, 2] where 0 and 1 (spine joints) are not swapped, 3 (right joint) and 2 (left joint) are swapped.
+    mode : 'symmetry' | 'all' | 'positions'
+        The mode of the mirroring (see above).
+    axis : 'X' | 'Y' | 'Z'
+        The axis to mirror the skeleton along.
+
+    Returns
+    -------
+    mirrored_local_rotations : torch.Tensor[..., n_joints, 4]
+        The mirrored local rotations of the joints.
+    mirrored_global_translation : torch.Tensor[..., 3]
+        The mirrored global translation of the root joint.
+    mirrored_offsets : torch.Tensor[n_joints, 3]
+        The mirrored offset of the joint from its parent.
+    mirrored_end_sites : torch.Tensor[n_end_sites, 3]
+        The mirrored end sites of the skeleton.
+
+    """
+
+    if mode == "all":
+        return _true_mirror(local_rotations, global_translation, parents, offsets, end_sites, axis)
+
+    elif mode == "symmetry":
+        if joints_mapping is None:
+            raise ValueError("joints_mapping must be provided for mode 'symmetry'")
+        if len(joints_mapping) != len(parents):
+            raise ValueError("joints_mapping must have the same length as the number of joints")
+        if axis == "X":
+            mirror_index = 0
+            q_mirror = (2, 3)
+        elif axis == "Y":
+            mirror_index = 1
+            q_mirror = (1, 3)
+        elif axis == "Z":
+            mirror_index = 2
+            q_mirror = (1, 2)
+        else:
+            raise ValueError("Invalid axis. Choose 'X', 'Y', or 'Z'")
+        # Convert to global space
+        _, global_rotations = fk(local_rotations, torch.zeros_like(global_translation), offsets, parents)
+        global_quats = quat.from_matrix(global_rotations)
+        # Mirror global positions
+        global_translation[..., mirror_index] = -global_translation[..., mirror_index].clone()
+        # Mirror X quats
+        global_quats = global_quats[..., joints_mapping, :]
+        global_quats[..., q_mirror[0]] = -global_quats[..., q_mirror[0]]
+        global_quats[..., q_mirror[1]] = -global_quats[..., q_mirror[1]]
+        # Convert back to local space
+        local_rotations = from_global_rotations(global_quats, parents)
+        return local_rotations, global_translation, offsets, end_sites
+
+    elif mode == "positions":
+        mirrored_local_rots, mirrored_global_pos, mirrored_offsets, _ = _true_mirror(
+            local_rotations, global_translation, parents, offsets, end_sites, axis
+        )
+        pos, _ = fk(mirrored_local_rots, mirrored_global_pos, mirrored_offsets, parents)
+        pos = pos - pos[..., 0:1, :]  # subtract root position to make it root-centered
+        mirrored_local_rots = from_root_positions(pos, parents, offsets)
+        return mirrored_local_rots, mirrored_global_pos, offsets, end_sites
+
+    else:
+        raise ValueError("Invalid mode. Choose 'symmetry', 'all', or 'positions'")
+
+
+def _true_mirror(
+    local_rotations: torch.Tensor,
+    global_translation: torch.Tensor,
+    parents: torch.Tensor,
+    offsets: torch.Tensor,
+    end_sites: torch.Tensor = None,
+    axis: str = "X",
+):
+    """
+    Mirror a skeleton along the X axis.
+    Note: The skeleton topology is also mirrored.
+
+    Parameters
+    ----------
+    local_rotations : torch.Tensor[..., n_joints, 4]
+        The local rotations of the joints.
+    global_translation : torch.Tensor[..., 3]
+        The global translation of the root joint.
+    parents : torch.Tensor[n_joints]
+        The parent of the joint.
+    offsets : torch.Tensor[n_joints, 3]
+        The offset of the joint from its parent.
+    end_sites : torch.Tensor[n_end_sites, 3]
+        The end sites of the skeleton.
+    axis : 'X' | 'Y' | 'Z'
+        The axis to mirror the skeleton along.
+
+    Returns
+    -------
+    mirrored_local_rotations : torch.Tensor[..., n_joints, 4]
+        The mirrored local rotations of the joints.
+    mirrored_global_translation : torch.Tensor[..., 3]
+        The mirrored global translation of the root joint.
+    mirrored_offsets : torch.Tensor[n_joints, 3]
+        The mirrored offset of the joint from its parent.
+    mirrored_end_sites : torch.Tensor[n_end_sites, 3]
+        The mirrored end sites of the skeleton.
+
+    """
+    local_rotations = local_rotations.clone()
+    global_translation = global_translation.clone()
+    offsets = offsets.clone()
+    if end_sites is not None:
+        end_sites = end_sites.clone()
+
+    if axis == "X":
+        mirror_index = 0
+        q_mirror = (2, 3)
+    elif axis == "Y":
+        mirror_index = 1
+        q_mirror = (1, 3)
+    elif axis == "Z":
+        mirror_index = 2
+        q_mirror = (1, 2)
+    else:
+        raise ValueError("Invalid axis. Choose 'X', 'Y', or 'Z'")
+
+    # Mirror positions
+    offsets[:, mirror_index] = -offsets[:, mirror_index]
+    if end_sites is not None:
+        end_sites[:, mirror_index] = -end_sites[:, mirror_index]
+    global_translation[..., mirror_index] = -global_translation[..., mirror_index]
+    # Convert to global space
+    _, global_rotations = fk(local_rotations, torch.zeros_like(global_translation), offsets, parents)
+    global_quats = quat.from_matrix(global_rotations)
+    # Mirror Quats
+    global_quats[..., q_mirror[0]] = -global_quats[..., q_mirror[0]]
+    global_quats[..., q_mirror[1]] = -global_quats[..., q_mirror[1]]
+    # Convert back to local space
+    local_rotations = from_global_rotations(global_quats, parents)
+
+    return local_rotations, global_translation, offsets, end_sites
