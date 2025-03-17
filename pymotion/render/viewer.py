@@ -1,3 +1,4 @@
+from __future__ import annotations
 import importlib
 
 REQUIRED_PACKAGES = ["plotly", "dash", "dash_bootstrap_components"]
@@ -25,7 +26,6 @@ def _check_dependencies():
 _check_dependencies()
 
 
-from __future__ import annotations
 import json
 from typing import List, Union
 import numpy as np
