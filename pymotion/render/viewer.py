@@ -122,7 +122,7 @@ class Viewer:
         # Check for debugging environment to avoid duplicated browser tabs
         if not os.environ.get("WERKZEUG_RUN_MAIN"):
             webbrowser.open_new("http://localhost:8050")
-        self.app.run_server(debug=True, use_reloader=self.use_reloader)
+        self.app.run(debug=True, use_reloader=self.use_reloader)
 
     def add_skeleton(
         self,
