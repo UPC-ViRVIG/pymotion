@@ -1,22 +1,30 @@
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
+
+import os
+import shutil
 import socket
 import struct
 import subprocess
-import os
-import shutil
+import sys
 import tempfile
-import numpy as np
-
-from pymotion.io.bvh import BVH
+import time
 from typing import Union
 
-pymotion_blender_script = os.path.join(os.path.dirname(__file__), "internal", "pymotion_blender.py")
+import numpy as np
+from pymotion.io.bvh import BVH
+
+pymotion_blender_script = os.path.join(
+    os.path.dirname(__file__), "internal", "pymotion_blender.py"
+)
 
 
 class BlenderAutoStarter:
     def __init__(self, blender_executable_path=None):
         self.blender_executable = self._find_blender_executable(blender_executable_path)
         if not self.blender_executable:
-            raise FileNotFoundError("Blender executable not found. Please install Blender.")
+            raise FileNotFoundError(
+                "Blender executable not found. Please install Blender."
+            )
 
     def _find_blender_executable(self, blender_executable_path=None):
         possible_executables = []
@@ -59,7 +67,9 @@ class BlenderAutoStarter:
         ]
         try:
             subprocess.Popen(command)  # Non-blocking call
-            print(f"Blender started in background with script: {blender_script_path}")
+            print(
+                f"[DEBUG PYTHON] Blender started in background with script: {blender_script_path}"
+            )
         except Exception as e:
             raise RuntimeError(f"Failed to start Blender: {e}")
 
@@ -75,6 +85,8 @@ class BlenderConnection:
         2: render orientations
         3: render BVH
         4: render checkerboard floor
+        5: render points timeline
+        6: set up rendering
 
     Example
     -------
@@ -105,7 +117,7 @@ class BlenderConnection:
         >>>    )
     """
 
-    def __init__(self, port: int = 2222) -> None:
+    def __init__(self, port: int = 2222, retries: int = 10, delay: float = 2.0) -> None:
         self.host = "127.0.0.1"
         self.port = port
         self.blender_starter = BlenderAutoStarter()
@@ -114,9 +126,30 @@ class BlenderConnection:
         try:
             self._connect_socket()  # Try to connect first, assuming Blender might be running
         except ConnectionRefusedError:
-            print("Starting Blender...")
+            print(
+                "[DEBUG PYTHON] Connection refused. Assuming Blender is not running.",
+                file=sys.stderr,
+            )
+            print("[DEBUG PYTHON] Starting Blender...")
             self.blender_starter.start_and_connect_blender(self.port)
-            self._connect_socket()  # Try to connect again after starting Blender
+
+            # Retry connecting after launching Blender
+            for i in range(retries):
+                try:
+                    print(f"[DEBUG PYTHON] Connection attempt {i + 1}/{retries}...")
+                    self._connect_socket()
+                    # If connection succeeds, break the loop
+                    return
+                except ConnectionRefusedError:
+                    if i < retries - 1:
+                        time.sleep(delay)
+                    else:
+                        # If all retries fail, raise the exception
+                        print(
+                            "[DEBUG PYTHON] Could not connect to Blender after multiple attempts.",
+                            file=sys.stderr,
+                        )
+                        raise
 
     def __enter__(self):
         return self
@@ -128,11 +161,17 @@ class BlenderConnection:
     def _connect_socket(self):
         if self.s is None:
             self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect((self.host, self.port))  # associate socket with interface in port number
-        print(f"Connected to {self.host}:{self.port}")
+        self.s.connect(
+            (self.host, self.port)
+        )  # associate socket with interface in port number
+        print(f"[DEBUG PYTHON] Connected to {self.host}:{self.port}")
 
     def clear_scene(self) -> None:
         message_id = 0
+        self._send_message_code(message_id)
+
+    def setup_rendering(self) -> None:
+        message_id = 6
         self._send_message_code(message_id)
 
     def render_points(
@@ -155,9 +194,13 @@ class BlenderConnection:
         if radius.shape[-1] != 1:
             raise ValueError("Radius must have shape [1] or [..., 1]")
         if color.ndim > 1 and points.shape != color.shape:
-            raise ValueError("Color must have shape [3] or [..., 3] matching points shape")
+            raise ValueError(
+                "Color must have shape [3] or [..., 3] matching points shape"
+            )
         if radius.ndim > 1 and points.shape[:-1] != radius.shape[:-1]:
-            raise ValueError("Radius must have shape [1] or [..., 1] matching points shape")
+            raise ValueError(
+                "Radius must have shape [1] or [..., 1] matching points shape"
+            )
 
         if color.ndim == 1:
             color = np.tile(color, points.shape[:-1] + (1,))
@@ -171,8 +214,55 @@ class BlenderConnection:
         self._send_message_code(message_id)
         self._send_data(flatten_points, flatten_color, flatten_radius)
 
+    def render_points_timeline(
+        self,
+        points: np.ndarray,
+        color: np.ndarray = np.array([1.0, 1.0, 1.0]),
+        radius: np.ndarray = np.array([0.1]),
+    ) -> None:
+        """
+        Parameters
+        ----------
+            points : np.ndarray[frames, ..., 3]
+            color (Optional) : np.ndarray[3] or np.ndarray[..., 3]
+            radius (Optional) : np.ndarray[1] or np.ndarray[..., 1]
+        """
+        if points.ndim < 2:
+            raise ValueError("Points must have shape [frames, ..., 3]")
+        if points.shape[-1] != 3:
+            raise ValueError("Points must have shape [frames, ..., 3]")
+        if color.shape[-1] != 3:
+            raise ValueError("Color must have shape [3] or [..., 3]")
+        if radius.shape[-1] != 1:
+            raise ValueError("Radius must have shape [1] or [..., 1]")
+        if color.ndim > 1 and points.shape[1:] != color.shape:
+            raise ValueError(
+                "Color must have shape [3] or [..., 3] matching points shape"
+            )
+        if radius.ndim > 1 and points.shape[1:-1] != radius.shape[:-1]:
+            raise ValueError(
+                "Radius must have shape [1] or [..., 1] matching points shape"
+            )
+
+        if color.ndim == 1 and points.ndim > 2:
+            color = np.tile(color, points.shape[1:-1] + (1,))
+        if radius.ndim == 1 and points.ndim > 2:
+            radius = np.tile(radius, points.shape[1:-1] + (1,))
+
+        frames = np.array([points.shape[0]])
+        flatten_points = points.flatten()
+        flatten_points = np.concatenate((frames, flatten_points), axis=0)
+        flatten_color = color.flatten()
+        flatten_radius = radius.flatten()
+        message_id = 5
+        self._send_message_code(message_id)
+        self._send_data(flatten_points, flatten_color, flatten_radius)
+
     def render_orientations(
-        self, orientations: np.ndarray, points: np.ndarray = None, scale: np.ndarray = np.array([1.0])
+        self,
+        orientations: np.ndarray,
+        points: np.ndarray = None,
+        scale: np.ndarray = np.array([1.0]),
     ) -> None:
         """
         Parameters
@@ -191,7 +281,9 @@ class BlenderConnection:
         if points is not None and points.shape[:-1] != orientations.shape[:-1]:
             raise ValueError("Points must have shape [..., 3] matching orientations")
         if scale.ndim > 1 and orientations.shape[:-1] != scale.shape[:-1]:
-            raise ValueError("Scale must have shape [1] or [..., 1] matching orientations shape")
+            raise ValueError(
+                "Scale must have shape [1] or [..., 1] matching orientations shape"
+            )
 
         if points is None:
             points = np.zeros(orientations.shape[:-1] + (3,))
@@ -228,7 +320,9 @@ class BlenderConnection:
             raise ValueError("BVH object expected")
         if color.shape != (3,):
             raise ValueError("Color must have shape [3]")
-        if end_joints is not None and not all(isinstance(joint, str) for joint in end_joints):
+        if end_joints is not None and not all(
+            isinstance(joint, str) for joint in end_joints
+        ):
             raise ValueError("End joints must be a list of strings")
         axis_candidates = ["-X", "X", "-Y", "Y", "-Z", "Z"]
         if axis_forward not in axis_candidates:
@@ -237,9 +331,14 @@ class BlenderConnection:
             raise ValueError("Axis up must be one of -X, X, -Y, Y, -Z, Z")
 
         # get a temporal path
-        with tempfile.NamedTemporaryFile(suffix=".bvh", delete=False) as f:
+        filename = bvh.data["filename"]
+        with tempfile.NamedTemporaryFile(
+            prefix=filename, suffix=".bvh", delete=False
+        ) as f:
             bvh.save(f.name)
-            self.render_bvh_from_path(f.name, color, end_joints, axis_forward, axis_up, delete_after=True)
+            self.render_bvh_from_path(
+                f.name, color, end_joints, axis_forward, axis_up, delete_after=True
+            )
 
     def render_bvh_from_path(
         self,
@@ -268,7 +367,9 @@ class BlenderConnection:
             raise ValueError("BVH path must be a string")
         if color.shape != (3,):
             raise ValueError("Color must have shape [3]")
-        if end_joints is not None and not all(isinstance(joint, str) for joint in end_joints):
+        if end_joints is not None and not all(
+            isinstance(joint, str) for joint in end_joints
+        ):
             raise ValueError("End joints must be a list of strings")
         axis_candidates = ["-X", "X", "-Y", "Y", "-Z", "Z"]
         if axis_forward not in axis_candidates:
@@ -280,14 +381,16 @@ class BlenderConnection:
         self._send_message_code(message_id)
         bvh_path += ";".join(end_joints) if end_joints else ""
         bvh_path += f";{axis_forward};{axis_up}"
-        self._send_data(bvh_path, color, np.array([1.0]) if delete_after else np.array([0.0]))
+        self._send_data(
+            bvh_path, color, np.array([1.0]) if delete_after else np.array([0.0])
+        )
 
     def render_checkerboard_floor(
         self,
         plane_size: float = 40.0,
         checker_size: float = 0.25,
-        color1: np.ndarray = np.array([0.4, 0.4, 0.4]),
-        color2: np.ndarray = np.array([1.0, 1.0, 1.0]),
+        color1: np.ndarray = np.array([0.8, 0.9, 1.0]),
+        color2: np.ndarray = np.array([0.5, 0.55, 0.6]),
     ):
         """
         Parameters
@@ -316,14 +419,23 @@ class BlenderConnection:
         self._send_data(data)
 
     def _send_message_code(self, message_id: int) -> None:
+        # print(f"[DEBUG PYTHON] Sending message code {message_id}")
         self.s.sendall(struct.pack("<i", message_id))
+        # print("[DEBUG PYTHON] Sent message code")
         # wait for confirmation
         ack = self.s.recv(4)
-        if struct.unpack("<i", ack)[0] != 1:
-            raise Exception("Some error occurred during communication")
+        # print("[DEBUG PYTHON] Received ack")
+        if not ack or struct.unpack("<i", ack)[0] != 1:
+            raise ConnectionAbortedError(
+                "Communication with Blender failed. It might have crashed."
+            )
+        # print("[DEBUG PYTHON] End of send_message_code")
 
     def _send_data(
-        self, data: Union[np.ndarray, str], color: np.ndarray = None, scale: np.ndarray = None
+        self,
+        data: Union[np.ndarray, str],
+        color: np.ndarray = None,
+        scale: np.ndarray = None,
     ) -> None:
 
         if isinstance(data, str):
@@ -346,8 +458,10 @@ class BlenderConnection:
 
         # wait for confirmation
         ack = self.s.recv(4)
-        if struct.unpack("<i", ack)[0] != 1:
-            raise Exception("Some error occurred during communication")
+        if not ack or struct.unpack("<i", ack)[0] != 1:
+            raise ConnectionAbortedError(
+                "Communication with Blender failed. It might have crashed."
+            )
 
         # send data
         if data_format_char == "s":

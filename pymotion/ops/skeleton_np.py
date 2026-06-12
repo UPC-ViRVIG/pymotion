@@ -1,9 +1,9 @@
-# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 
-import pymotion.ops.vector_torch as vec
-import pymotion.rotations.dual_quat_torch as dquat
-import pymotion.rotations.quat_torch as quat
-import torch
+import numpy as np
+import pymotion.ops.vector_np as vec
+import pymotion.rotations.dual_quat_np as dquat
+import pymotion.rotations.quat_np as quat
 
 """
 A skeleton is a set of joints connected by bones.
@@ -16,11 +16,11 @@ The skeleton is defined by:
 
 
 def fk_quat(
-    rot: torch.Tensor,
-    global_pos: torch.Tensor,
-    offsets: torch.Tensor,
-    parents: torch.Tensor,
-) -> tuple[torch.Tensor, torch.Tensor]:
+    rot: np.array,
+    global_pos: np.array,
+    offsets: np.array,
+    parents: np.array,
+) -> tuple[np.array, np.array]:
     """
     Compute forward kinematics for a skeleton using quaternion operations.
     From the local rotations, global position and offsets, compute the
@@ -31,30 +31,28 @@ def fk_quat(
 
     Parameters
     -----------
-        rot: torch.Tensor[..., n_joints, 4]
+        rot: np.array[..., n_joints, 4]
             local rotations as quaternions
-        global_pos: torch.Tensor[..., 3]
+        global_pos: np.array[..., 3]
             global position of the root joint
-        offsets: torch.Tensor[..., n_joints, 3] or torch.Tensor[n_joints, 3]
+        offsets: np.array[..., n_joints, 3] or np.array[n_joints, 3]
             local offsets from parent joints
-        parents: torch.Tensor[n_joints]
+        parents: np.array[n_joints]
             parent indices for each joint
 
     Returns
     --------
-        positions: torch.Tensor[..., n_joints, 3]
+        positions: np.array[..., n_joints, 3]
             global positions of the joints
-        global_rotations: torch.Tensor[..., n_joints, 4]
+        global_rotations: np.array[..., n_joints, 4]
             global rotations of the joints as quaternions
     """
-    device = rot.device
-
     # Normalize input quaternions
     rot = quat.normalize(rot)
 
     # Initialize global positions and rotations
-    positions = torch.zeros(rot.shape[:-1] + (3,), device=device, dtype=rot.dtype)
-    global_rotations = torch.zeros_like(rot)
+    positions = np.zeros(rot.shape[:-1] + (3,), dtype=rot.dtype)
+    global_rotations = np.zeros_like(rot)
 
     # Root joint
     positions[..., 0, :] = global_pos
@@ -67,24 +65,24 @@ def fk_quat(
 
         # Global rotation = parent_global_rotation * local_rotation
         global_rotations[..., i, :] = quat.mul(
-            global_rotations[..., parent, :].clone(), rot[..., i, :].clone()
+            global_rotations[..., parent, :].copy(), rot[..., i, :].copy()
         )
 
         # Global position = parent_position + rotate(offset by parent_global_rotation)
         rotated_offset = quat.mul_vec(
-            global_rotations[..., parent, :].clone(), offsets[..., i, :]
+            global_rotations[..., parent, :].copy(), offsets[..., i, :]
         )
-        positions[..., i, :] = positions[..., parent, :].clone() + rotated_offset
+        positions[..., i, :] = positions[..., parent, :].copy() + rotated_offset
 
     return positions, global_rotations
 
 
 def fk(
-    rot: torch.Tensor,
-    global_pos: torch.Tensor,
-    offsets: torch.Tensor,
-    parents: torch.Tensor,
-) -> torch.Tensor:
+    rot: np.array,
+    global_pos: np.array,
+    offsets: np.array,
+    parents: np.array,
+) -> np.array:
     """
     Compute forward kinematics for a skeleton.
     From the local rotations, global position and offsets, compute the
@@ -92,35 +90,26 @@ def fk(
 
     Parameters
     -----------
-        rot: torch.Tensor[..., n_joints, 4] or torch.Tensor[..., n_joints, 3, 3]
-        global_pos: torch.Tensor[..., 3]
-        offsets: torch.Tensor[..., n_joints, 3] or torch.Tensor[n_joints, 3]
-        parents: torch.Tensor[n_joints]
+        rot: np.array[..., n_joints, 4] or np.array[..., n_joints, 3, 3]
+        global_pos: np.array[..., 3]
+        offsets: np.array[..., n_joints, 3] or np.array[n_joints, 3]
+        parents: np.array[n_joints]
 
     Returns
     --------
-        positions: torch.Tensor[..., n_joints, 3]
+        positions: np.array[..., n_joints, 3]
             positions of the joints
-        rotmats: torch.Tensor[..., 3, 3]. Matrix order: [[r0.x, r0.y, r0.z],
-                                                         [r1.x, r1.y, r1.z],
-                                                         [r2.x, r2.y, r2.z]] where ri is row i.
+        rotmats: np.array[..., 3, 3]. Matrix order: [[r0.x, r0.y, r0.z],
+                                                     [r1.x, r1.y, r1.z],
+                                                     [r2.x, r2.y, r2.z]] where ri is row i.
             rotation matrices of the joints
     """
-    device = rot.device
     # create a homogeneous matrix of shape (..., 4, 4)
     if rot.shape[-1] == 4:
-        mat = torch.zeros(
-            rot.shape[:-1] + (4, 4),
-            device=device,
-            dtype=rot.dtype,
-        )
+        mat = np.zeros(rot.shape[:-1] + (4, 4))
         mat[..., :3, :3] = quat.to_matrix(quat.normalize(rot))
     elif rot.shape[-1] == 3:
-        mat = torch.zeros(
-            rot.shape[:-2] + (4, 4),
-            device=device,
-            dtype=rot.dtype,
-        )
+        mat = np.zeros(rot.shape[:-2] + (4, 4))
         mat[..., :3, :3] = rot
     else:
         raise ValueError(
@@ -135,18 +124,16 @@ def fk(
         # root
         if i == 0:
             continue
-        mat[..., i, :, :] = torch.matmul(
-            mat[..., parent, :, :].clone(),
-            mat[..., i, :, :].clone(),
+        mat[..., i, :, :] = np.matmul(
+            mat[..., parent, :, :],
+            mat[..., i, :, :],
         )
     positions = mat[..., :3, 3]
     rotmats = mat[..., :3, :3]
     return positions, rotmats
 
 
-def from_global_rotations(
-    global_quats: torch.Tensor, parents: torch.Tensor
-) -> torch.Tensor:
+def from_global_rotations(global_quats: np.array, parents: np.array) -> np.array:
     """
     Compute the inverse forward kinematics for a skeleton.
     From the global rotations and the parents of the joints,
@@ -154,15 +141,15 @@ def from_global_rotations(
 
     Parameters
     -----------
-        global_quats: torch.Tensor[..., n_joints, 4]
-        parents: torch.Tensor[n_joints]
+        global_quats: np.array[..., n_joints, 4]
+        parents: np.array[n_joints]
 
     Returns
     --------
-        local_quats: torch.Tensor[..., n_joints, 4]
+        local_quats: np.array[..., n_joints, 4]
             local rotations of the joints
     """
-    local_quats = torch.empty_like(global_quats)
+    local_quats = np.empty_like(global_quats)
 
     # Root joint remains the same
     local_quats[..., 0, :] = global_quats[..., 0, :]
@@ -179,8 +166,8 @@ def from_global_rotations(
 
 
 def from_root_positions(
-    positions: torch.Tensor, parents: torch.Tensor, offsets: torch.Tensor
-) -> torch.Tensor:
+    positions: np.array, parents: np.array, offsets: np.array
+) -> np.array:
     """
     Convert the root-centered position space joint positions
     to the skeleton information.
@@ -189,16 +176,16 @@ def from_root_positions(
 
     Parameters
     ----------
-    positions : torch.Tensor[frames, n_joints, 3]
+    positions : np.array[frames, n_joints, 3]
         The root-centered position space (not rotation-relative) joint positions.
-    parents : torch.Tensor[n_joints]
+    parents : np.array[n_joints]
         The parent of the joint.
-    offsets : torch.Tensor[n_joints, 3]
+    offsets : np.array[n_joints, 3]
         The offset of the joint from its parent.
 
     Returns
     -------
-    rotations : torch.Tensory[frames, n_joints, 4]
+    rotations : np.array[frames, n_joints, 4]
         The local rotation of the joint.
     """
 
@@ -212,12 +199,7 @@ def from_root_positions(
             children[parent].append(i)
 
     # Iterate joints and align directions from the rest pose to the predicted pose
-    rotations = torch.tile(
-        torch.tensor(
-            [1.0, 0.0, 0.0, 0.0], device=positions.device, dtype=positions.dtype
-        ),
-        (nFrames, nJoints, 1),
-    )
+    rotations = np.tile(np.array([1.0, 0.0, 0.0, 0.0]), (nFrames, nJoints, 1))
     for j, children_of_j in enumerate(children):
         if len(children_of_j) == 0:  # Skip joints with 0 children
             continue
@@ -225,7 +207,7 @@ def from_root_positions(
         # Compute current pose (start with rest pose)
         pos, rotmats = fk(
             rotations,
-            torch.zeros((1, 3), device=positions.device, dtype=positions.dtype),
+            np.zeros((1, 3)),
             offsets,
             parents,
         )
@@ -243,7 +225,7 @@ def from_root_positions(
         for gc in children_of_j[1:]:
             pos, rotmats = fk(
                 rotations,
-                torch.zeros((1, 3), device=positions.device, dtype=positions.dtype),
+                np.zeros((1, 3)),
                 offsets,
                 parents,
             )
@@ -263,25 +245,25 @@ def from_root_positions(
     return rotations
 
 
-def from_root_dual_quat(dq: torch.Tensor, parents: torch.Tensor):
+def from_root_dual_quat(dq: np.array, parents: np.array) -> np.array:
     """
     Convert root-centered dual quaternion to the skeleton information.
 
     Parameters
     ----------
-    dq : torch.Tensor[..., n_joints, 8]
+    dq: np.array[..., n_joints, 8]
         Includes as first element the global position of the root joint
-    parents : torch.Tensor[n_joints]
+    parents: np.array[n_joints]
 
     Returns
     -------
-    rotations : torch.Tensor[..., n_joints, 4]
-    translations : torch.Tensor[..., n_joints, 3]
+    rotations : np.array[..., n_joints, 4]
+    translations : np.array[..., n_joints, 3]
     """
-    n_joints = dq.shape[-2]
-    # rotations has shape (..., frames, n_joints, 4)
-    # translations has shape (..., frames, n_joints, 3)
-    rotations, translations = dquat.to_rotation_translation(dq.clone())
+    n_joints = dq.shape[1]
+    # rotations has shape (frames, n_joints, 4)
+    # translations has shape (frames, n_joints, 3)
+    rotations, translations = dquat.to_rotation_translation(dq.copy())
     # make transformations local to the parents
     # (initially local to the root)
     for j in reversed(range(1, n_joints)):
@@ -298,37 +280,32 @@ def from_root_dual_quat(dq: torch.Tensor, parents: torch.Tensor):
 
 
 def to_root_dual_quat(
-    rotations: torch.Tensor,
-    global_pos: torch.Tensor,
-    parents: torch.Tensor,
-    offsets: torch.Tensor,
+    rotations: np.array, global_pos: np.array, parents: np.array, offsets: np.array
 ):
     """
     Convert the skeleton information to root-centered dual quaternions.
 
     Parameters
     ----------
-    rotations : torch.Tensor[..., n_joints, 4]
-        The rotation of the joint.
-    global_pos: torch.Tensor[..., 3]
+    rotations : np.array[..., n_joints, 4]
+        The local rotation of the joint.
+    global_pos: np.array[..., 3]
         The global position of the root joint.
-    parents : torch.Tensor[n_joints]
+    parents : np.array[n_joints]
         The parent of the joint.
-    offsets : torch.Tensor[n_joints, 3]
+    offsets : np.array[n_joints, 3]
         The offset of the joint from its parent.
 
     Returns
     -------
-    dual_quat : torch.Tensor[..., n_joints, 8]
+    dual_quat : np.array[..., n_joints, 8]
         The root-centered dual quaternion representation of the skeleton.
     """
-    assert (
-        offsets[0] == torch.zeros(3, device=offsets.device, dtype=offsets.dtype)
-    ).all()
+    assert (offsets[0] == np.zeros(3)).all()
     n_joints = rotations.shape[1]
-    # translations has shape (frames, n_joints, 3)
-    rotations = rotations.clone()
-    translations = torch.tile(offsets, rotations.shape[:-2] + (1, 1))
+    # translations has shape (..., n_joints, 3)
+    rotations = rotations.copy()
+    translations = np.tile(offsets, rotations.shape[:-2] + (1, 1))
     translations[..., 0, :] = global_pos
     # make transformations local to the root
     for j in range(1, n_joints):
@@ -346,15 +323,15 @@ def to_root_dual_quat(
 
 
 def mirror(
-    local_rotations: torch.Tensor,
-    global_translation: torch.Tensor,
-    parents: torch.Tensor,
-    offsets: torch.Tensor,
-    end_sites: torch.Tensor = None,
-    joints_mapping: torch.Tensor = None,
+    local_rotations: np.array,
+    global_translation: np.array,
+    parents: np.array,
+    offsets: np.array,
+    end_sites: np.array = None,
+    joints_mapping: np.array = None,
     mode: str = "all",
     axis: str = "X",
-):
+) -> tuple[np.array, np.array, np.array, np.array]:
     """
     Mirror a skeleton along the X axis. Different modes are available depending on the parameter 'mode'.
     if mode == 'symmetry':
@@ -369,17 +346,17 @@ def mirror(
 
     Parameters
     ----------
-    local_rotations : torch.Tensor[..., n_joints, 4]
+    local_rotations : np.array[..., n_joints, 4]
         The local rotations of the joints.
-    global_translation : torch.Tensor[..., 3]
+    global_translation : np.array[..., 3]
         The global translation of the root joint.
-    parents : torch.Tensor[n_joints]
+    parents : np.array[n_joints]
         The parent of the joint.
-    offsets : torch.Tensor[n_joints, 3]
+    offsets : np.array[n_joints, 3]
         The offset of the joint from its parent.
-    end_sites : torch.Tensor[n_end_sites, 3]
+    end_sites : np.array[n_end_sites, 3]
         The end sites of the skeleton.
-    joints_mapping : torch.Tensor
+    joints_mapping : np.array
         The mapping of the joints to mirror. Only required for mode == 'symmetry'.
         joints_mapping must be provided, e.g., [0, 1, 3, 2] where 0 and 1 (spine joints) are not swapped, 3 (right joint) and 2 (left joint) are swapped.
     mode : 'symmetry' | 'all' | 'positions'
@@ -389,13 +366,13 @@ def mirror(
 
     Returns
     -------
-    mirrored_local_rotations : torch.Tensor[..., n_joints, 4]
+    mirrored_local_rotations : np.array[..., n_joints, 4]
         The mirrored local rotations of the joints.
-    mirrored_global_translation : torch.Tensor[..., 3]
+    mirrored_global_translation : np.array[..., 3]
         The mirrored global translation of the root joint.
-    mirrored_offsets : torch.Tensor[n_joints, 3]
+    mirrored_offsets : np.array[n_joints, 3]
         The mirrored offset of the joint from its parent.
-    mirrored_end_sites : torch.Tensor[n_end_sites, 3]
+    mirrored_end_sites : np.array[n_end_sites, 3]
         The mirrored end sites of the skeleton.
 
     """
@@ -425,13 +402,13 @@ def mirror(
             raise ValueError("Invalid axis. Choose 'X', 'Y', or 'Z'")
         # Convert to global space
         _, global_rotations = fk(
-            local_rotations, torch.zeros_like(global_translation), offsets, parents
+            local_rotations, np.zeros_like(global_translation), offsets, parents
         )
         global_quats = quat.from_matrix(global_rotations)
         # Mirror global positions
         global_translation[..., mirror_index] = -global_translation[
             ..., mirror_index
-        ].clone()
+        ].copy()
         # Mirror X quats
         global_quats = global_quats[..., joints_mapping, :]
         global_quats[..., q_mirror[0]] = -global_quats[..., q_mirror[0]]
@@ -454,49 +431,49 @@ def mirror(
 
 
 def _true_mirror(
-    local_rotations: torch.Tensor,
-    global_translation: torch.Tensor,
-    parents: torch.Tensor,
-    offsets: torch.Tensor,
-    end_sites: torch.Tensor = None,
+    local_rotations: np.array,
+    global_translation: np.array,
+    parents: np.array,
+    offsets: np.array,
+    end_sites: np.array = None,
     axis: str = "X",
-):
+) -> tuple[np.array, np.array, np.array, np.array]:
     """
     Mirror a skeleton along the X axis.
     Note: The skeleton topology is also mirrored.
 
     Parameters
     ----------
-    local_rotations : torch.Tensor[..., n_joints, 4]
+    local_rotations : np.array[..., n_joints, 4]
         The local rotations of the joints.
-    global_translation : torch.Tensor[..., 3]
+    global_translation : np.array[..., 3]
         The global translation of the root joint.
-    parents : torch.Tensor[n_joints]
+    parents : np.array[n_joints]
         The parent of the joint.
-    offsets : torch.Tensor[n_joints, 3]
+    offsets : np.array[n_joints, 3]
         The offset of the joint from its parent.
-    end_sites : torch.Tensor[n_end_sites, 3]
+    end_sites : np.array[n_end_sites, 3]
         The end sites of the skeleton.
     axis : 'X' | 'Y' | 'Z'
         The axis to mirror the skeleton along.
 
     Returns
     -------
-    mirrored_local_rotations : torch.Tensor[..., n_joints, 4]
+    mirrored_local_rotations : np.array[..., n_joints, 4]
         The mirrored local rotations of the joints.
-    mirrored_global_translation : torch.Tensor[..., 3]
+    mirrored_global_translation : np.array[..., 3]
         The mirrored global translation of the root joint.
-    mirrored_offsets : torch.Tensor[n_joints, 3]
+    mirrored_offsets : np.array[n_joints, 3]
         The mirrored offset of the joint from its parent.
-    mirrored_end_sites : torch.Tensor[n_end_sites, 3]
+    mirrored_end_sites : np.array[n_end_sites, 3]
         The mirrored end sites of the skeleton.
 
     """
-    local_rotations = local_rotations.clone()
-    global_translation = global_translation.clone()
-    offsets = offsets.clone()
+    local_rotations = local_rotations.copy()
+    global_translation = global_translation.copy()
+    offsets = offsets.copy()
     if end_sites is not None:
-        end_sites = end_sites.clone()
+        end_sites = end_sites.copy()
 
     if axis == "X":
         mirror_index = 0
@@ -517,7 +494,7 @@ def _true_mirror(
     global_translation[..., mirror_index] = -global_translation[..., mirror_index]
     # Convert to global space
     _, global_rotations = fk(
-        local_rotations, torch.zeros_like(global_translation), offsets, parents
+        local_rotations, np.zeros_like(global_translation), offsets, parents
     )
     global_quats = quat.from_matrix(global_rotations)
     # Mirror Quats
