@@ -80,7 +80,7 @@ def receive_command(conn):
         # --- Receive Data (if any) ---
         data, colors, scales = (None, None, None)
         if not (
-            message_id == 0 or message_id == 6
+            message_id == 0 or message_id == 7
         ):  # clear_scene() nad other functions have no data
             size_data_bytes = conn.recv(4)
             size_data = struct.unpack("<i", size_data_bytes)[0]
@@ -166,7 +166,27 @@ def process_single_command(command):
             render_points_timeline(data, color, scale)
         elif message_id == 6:
             print("[PyMotion Main] Setting up rendering")
-            setup_rendering()
+            if data is None or len(data) < 4:
+                setup_rendering()
+            else:
+                setup_rendering(
+                    render_samples=int(round(data[0])),
+                    viewport_samples=int(round(data[1])),
+                    resolution_x=int(round(data[2])),
+                    resolution_y=int(round(data[3])),
+                )
+        elif message_id == 7:
+            print("[PyMotion Main] Rendering animation (bpy.ops.render.render(animation=True))")
+            bpy.ops.render.render(animation=True)
+        elif message_id == 8:
+            print("[PyMotion Main] Setting camera position and focal length")
+            try:
+                cam_pos = data[:3]
+                focal_len = data[3]
+                set_camera(cam_pos, focal_len)
+            except Exception as e:
+                print(f"[PyMotion Main] Error setting camera: {e}")
+
         else:
             print(f"[PyMotion Main] Unknown message id {message_id}")
 
@@ -189,7 +209,12 @@ def clear_scene():
         bpy.data.collections.remove(col)
 
 
-def setup_rendering():
+def setup_rendering(
+    render_samples=32,
+    viewport_samples=32,
+    resolution_x=1920,
+    resolution_y=1080,
+):
     scene = bpy.context.scene
 
     # --- Output Settings ---
@@ -217,8 +242,12 @@ def setup_rendering():
     except TypeError:
         scene.render.engine = "BLENDER_EEVEE"
 
-    scene.eevee.taa_render_samples = 32  # Render Samples
-    scene.eevee.taa_samples = 32  # Viewport Samples
+    scene.eevee.taa_render_samples = int(render_samples)  # Render Samples
+    scene.eevee.taa_samples = int(viewport_samples)  # Viewport Samples
+
+    # --- Resolution Settings ---
+    scene.render.resolution_x = int(resolution_x)
+    scene.render.resolution_y = int(resolution_y)
 
     # --- World Setup ---
     if scene.world is None:
@@ -245,6 +274,36 @@ def setup_rendering():
         math.radians(38.7803),
         math.radians(-0.660154),
     )
+
+
+def set_camera(cam_pos, focal_len):
+    """
+    Sets the camera position, rotation, and focal length.
+    cam_pos: (x, y, z) tuple or list
+    focal_len: float (in mm)
+    """
+    scene = bpy.context.scene
+    # Ensure camera exists
+    if "Camera" not in bpy.data.objects:
+        bpy.ops.object.camera_add(align="VIEW", location=(0, 0, 0), rotation=(0, 0, 0))
+        camera_obj = bpy.context.active_object
+        camera_obj.name = "Camera"
+    camera_obj = bpy.data.objects["Camera"]
+    # Set as active camera if not already
+    if scene.camera is not camera_obj:
+        scene.camera = camera_obj
+    # Set camera position
+    camera_obj.location = cam_pos
+    camera_obj.rotation_mode = "XYZ"
+    # Use the same rotation as in render_mocha_blender.py
+    camera_obj.rotation_euler = (
+        math.radians(54.1935),
+        math.radians(-0.000027),
+        math.radians(-0.230373),
+    )
+    camera_obj.data.lens = focal_len
+    # Optionally print for debug
+    print(f"[PyMotion Blender] Camera set: pos={cam_pos}, focal_length={focal_len}")
 
 
 def render_points(data, color, scale):
@@ -442,15 +501,11 @@ def render_checkerboard_floor(data):
     create_checkerboard_plane(plane_size, checker_size, color1, color2)
 
 
-def get_material(
-    color_rgb, no_illumination=False
-):  # Function to get or create material
+def get_material(color_rgb, no_illumination=False):  # Function to get or create material
     if color_rgb in SERVER_STATE["material_cache"]:
         return SERVER_STATE["material_cache"][color_rgb]  # Reuse existing material
 
-    material = bpy.data.materials.new(
-        name=f"PyMotionMat_{color_rgb}"
-    )  # Create new material
+    material = bpy.data.materials.new(name=f"PyMotionMat_{color_rgb}")  # Create new material
     material.use_nodes = True
     if no_illumination:
         background_node = material.node_tree.nodes.new(type="ShaderNodeBackground")
@@ -512,6 +567,7 @@ def generate_rig_representation(armature_obj, color, end_joints=None):
             head_location, base_head_radius * distance_factor, bone.name
         )
         sphere_head.data.materials.append(material)
+        sphere_head.data = sphere_head.data.copy()
         sphere_current_collection = sphere_head.users_collection[0]
         # Link the new object to the collection
         rig_collection.objects.link(sphere_head)
@@ -530,6 +586,7 @@ def generate_rig_representation(armature_obj, color, end_joints=None):
             bone.name,
         )
         cylinder.data.materials.append(material)
+        cylinder.data = cylinder.data.copy()
         cylinder_current_collection = cylinder.users_collection[0]
         rig_collection.objects.link(cylinder)
         cylinder_current_collection.objects.unlink(cylinder)

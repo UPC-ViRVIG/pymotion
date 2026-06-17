@@ -8,9 +8,10 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Union
 
 import numpy as np
+
+from typing import Union
 from pymotion.io.bvh import BVH
 
 pymotion_blender_script = os.path.join(os.path.dirname(__file__), "internal", "pymotion_blender.py")
@@ -81,6 +82,8 @@ class BlenderConnection:
         4: render checkerboard floor
         5: render points timeline
         6: set up rendering
+        7: render animation
+        8: set camera
 
     Example
     -------
@@ -162,9 +165,25 @@ class BlenderConnection:
         message_id = 0
         self._send_message_code(message_id)
 
-    def setup_rendering(self) -> None:
+    def setup_rendering(
+        self,
+        render_samples: int = 32,
+        viewport_samples: int = 32,
+        resolution_x: int = 1920,
+        resolution_y: int = 1080,
+    ) -> None:
+        if render_samples <= 0 or viewport_samples <= 0:
+            raise ValueError("Render and viewport samples must be > 0")
+        if resolution_x <= 0 or resolution_y <= 0:
+            raise ValueError("Resolution must be > 0")
+
         message_id = 6
+        data = np.array(
+            [render_samples, viewport_samples, resolution_x, resolution_y],
+            dtype=np.float32,
+        )
         self._send_message_code(message_id)
+        self._send_data(data)
 
     def render_points(
         self,
@@ -443,6 +462,25 @@ class BlenderConnection:
             self.s.sendall(struct.pack(f"<{len(color)}f", *(color)))
         if scale is not None:
             self.s.sendall(struct.pack(f"<{len(scale)}f", *(scale)))
+
+    def render_animation(self):
+        """
+        Triggers Blender to render the animation (as in bpy.ops.render.render(animation=True)).
+        Requires Blender server script to handle message type 7.
+        """
+        message_id = 7
+        self._send_message_code(message_id)
+
+    def set_camera(self, cam_pos, focal_len):
+        """
+        Sets the camera position and focal length in Blender.
+        Sends message type 8 with cam_pos (tuple of 3 floats) and focal_len (float).
+        """
+        message_id = 8
+        # Pack cam_pos and focal_len as a float array
+        data = np.array(list(cam_pos) + [focal_len], dtype=np.float32)
+        self._send_message_code(message_id)
+        self._send_data(data)
 
     def close(self):
         self.s.close()

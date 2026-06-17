@@ -9,8 +9,8 @@ Some features of PyMotion are:
 - A continuous 6D rotation representation, as introduced by [Zhou et al. [2019]](https://doi.org/10.1109/CVPR.2019.00589)
 - A BVH file reader and preprocessor for loading and transforming motion data
 - Skeletal operations such as Forward Kinematics for computing global joint positions from local joint rotations
-- A plotly-based visualizer for debugging and visualizing character animation directly in Python
-- [**Experimental**] PyMotion to Blender automatic communication for debugging and visualizing character animation
+- [**Deprecated**] A plotly-based visualizer for debugging and visualizing character animation directly in Python
+- PyMotion to Blender automatic communication for debugging and visualizing character animation
 - NumPy and PyTorch implementations and tests for all functions
 
 ## Contents
@@ -412,6 +412,7 @@ from pymotion.render.blender import BlenderConnection
 
 with BlenderConnection() as conn:
     conn.clear_scene()
+    conn.setup_rendering()
     conn.render_checkerboard_floor()
     conn.render_points(
         np.array([[0, -3, 0], [1, 2, 3]]), np.array([[0, 0, 1], [0, 1, 0]]), radius=np.array([[0.25], [0.05]])
@@ -441,14 +442,14 @@ with BlenderConnection() as conn:
 
 ## Roadmap
 
-This repository is authored and maintained by [Jose Luis Ponton](https://github.com/JLPM22) as part of his Ph.D.
+This repository is authored and maintained by [Jose Luis Ponton](https://joseluisponton.com).
 
 Features will be added when new operations or rotation representations are needed in the development of research projects. Here it is a list of possible features and improvements for the future:
 
 - Extend documentation and add examples in the description of each function.
-- Include new animation importers such as FBX
+- Include new animation importers such as FBX, USD, ...
 - Include useful operations for data augmentation such as *animation mirroring (done)*, noise addition, temporal warping, etc.
-- Create an Inverse Kinematics module
+- Create an Inverse Kinematics module.
 
 ## License
 
