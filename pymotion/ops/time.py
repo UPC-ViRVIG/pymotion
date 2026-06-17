@@ -8,8 +8,8 @@ regardless of the underlying array library being used.
 The dispatcher imports backends at module load time. If a library isn't installed,
 its backend will be None and will raise an error at runtime if you try to use it.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 # Import type references and backend modules at module import time
 _TorchTensor = None
@@ -85,24 +85,16 @@ def interpolate_positions(
             if axis is not None:
                 dim = axis
             else:
-                raise ValueError(
-                    "Either 'axis' or 'dim' parameter must be provided for PyTorch tensors."
-                )
-        return _time_torch.interpolate_positions(
-            sample_times, original_times, positions, dim, method
-        )
+                raise ValueError("Either 'axis' or 'dim' parameter must be provided for PyTorch tensors.")
+        return _time_torch.interpolate_positions(sample_times, original_times, positions, dim, method)
     else:
         # Use axis parameter for NumPy arrays
         if axis is None:
             if dim is not None:
                 axis = dim
             else:
-                raise ValueError(
-                    "Either 'axis' or 'dim' parameter must be provided for NumPy arrays."
-                )
-        return _time_np.interpolate_positions(
-            sample_times, original_times, positions, axis, method
-        )
+                raise ValueError("Either 'axis' or 'dim' parameter must be provided for NumPy arrays.")
+        return _time_np.interpolate_positions(sample_times, original_times, positions, axis, method)
 
 
 # Expose public API

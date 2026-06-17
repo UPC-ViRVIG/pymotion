@@ -120,16 +120,10 @@ class BVH:
                     number_channels = int(words[1])
                     channels[current] = number_channels
                     if number_channels == 6:
-                        position_order[current] = [
-                            self.bvh_pos_map_num[x] for x in words[2 : 2 + 3]
-                        ]
-                        rot_order[current] = [
-                            self.bvh_rot_map[x] for x in words[2 + 3 : 2 + 3 + 3]
-                        ]
+                        position_order[current] = [self.bvh_pos_map_num[x] for x in words[2 : 2 + 3]]
+                        rot_order[current] = [self.bvh_rot_map[x] for x in words[2 + 3 : 2 + 3 + 3]]
                     elif number_channels == 3:
-                        rot_order[current] = [
-                            self.bvh_rot_map[x] for x in words[2 : 2 + 3]
-                        ]
+                        rot_order[current] = [self.bvh_rot_map[x] for x in words[2 : 2 + 3]]
                     else:
                         raise Exception("Unknown number of channels")
                     continue
@@ -144,9 +138,7 @@ class BVH:
                     end_sites_parents = np.array(end_sites_parents)
                     rot_order = np.array(rot_order)
                     channels = np.array(channels)
-                    positions = np.tile(offsets, (number_frames, 1)).reshape(
-                        number_frames, len(offsets), 3
-                    )
+                    positions = np.tile(offsets, (number_frames, 1)).reshape(number_frames, len(offsets), 3)
                     rotations = np.zeros((number_frames, len(names), 3))
                     continue
 
@@ -238,9 +230,7 @@ class BVH:
 
             for i in range(self.data["positions"].shape[0]):
                 for j in joint_order:
-                    if (
-                        self.data["channels"][j] == 6
-                    ):  # joint has position and rotation channels
+                    if self.data["channels"][j] == 6:  # joint has position and rotation channels
                         f.write(
                             "%f %f %f "
                             % (
@@ -284,13 +274,9 @@ class BVH:
 
         reverse_order = [order.index(i) for i in range(len(order))]
 
-        self.data["names"] = np.array(
-            [self.data["names"][reverse_order[i]] for i in range(len(order))]
-        )
+        self.data["names"] = np.array([self.data["names"][reverse_order[i]] for i in range(len(order))])
         self.data["offsets"] = self.data["offsets"][reverse_order]
-        self.data["end_sites_parents"] = np.array(
-            [order[j] for j in self.data["end_sites_parents"]]
-        )
+        self.data["end_sites_parents"] = np.array([order[j] for j in self.data["end_sites_parents"]])
         self.data["parents"] = np.array(
             [order[self.data["parents"][reverse_order[i]]] for i in range(len(order))]
         )
@@ -310,9 +296,7 @@ class BVH:
 
         # Identify joints to keep
         delete_joints_set = set(delete_joints)
-        keep_joints = [
-            i for i in range(len(self.data["names"])) if i not in delete_joints_set
-        ]
+        keep_joints = [i for i in range(len(self.data["names"])) if i not in delete_joints_set]
         keep_joints_set = set(keep_joints)
         new_to_old = dict(enumerate(keep_joints))
         old_to_new = dict((v, k) for k, v in new_to_old.items())
@@ -325,12 +309,9 @@ class BVH:
         for j in keep_joints:
             while parents[j] not in keep_joints_set:
                 p = parents[j]
-                new_rots[:, old_to_new[j], :] = quat.mul(
-                    rots[:, p, :], new_rots[:, old_to_new[j], :]
-                )
+                new_rots[:, old_to_new[j], :] = quat.mul(rots[:, p, :], new_rots[:, old_to_new[j], :])
                 new_pos[:, old_to_new[j], :] = (
-                    quat.mul_vec(rots[:, p, :], new_pos[:, old_to_new[j], :])
-                    + pos[:, p, :]
+                    quat.mul_vec(rots[:, p, :], new_pos[:, old_to_new[j], :]) + pos[:, p, :]
                 )
                 new_offsets[old_to_new[j]] = (
                     quat.mul_vec(rots[0, p, :], new_offsets[old_to_new[j]]) + offsets[p]
@@ -350,15 +331,11 @@ class BVH:
 
         # Update end_sites_parents to reflect the removal of joints
         updated_end_sites_parents = [
-            old_to_new[es_parent]
-            for es_parent in end_sites_parents
-            if es_parent in old_to_new
+            old_to_new[es_parent] for es_parent in end_sites_parents if es_parent in old_to_new
         ]
         # Remove end sites associated with deleted joints, if necessary
         valid_end_sites_indices = [
-            i
-            for i, es_parent in enumerate(end_sites_parents)
-            if es_parent not in delete_joints
+            i for i, es_parent in enumerate(end_sites_parents) if es_parent not in delete_joints
         ]
 
         # Update data
@@ -366,9 +343,7 @@ class BVH:
         self.data["rot_order"] = self.data["rot_order"][..., keep_joints, :]
         self.data["positions"] = new_pos
         self.data["rotations"] = np.degrees(
-            quat.to_euler(
-                new_rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1))
-            )
+            quat.to_euler(new_rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1)))
         )
         self.data["parents"] = np.array(new_parents)
         self.data["offsets"] = new_offsets
@@ -398,9 +373,7 @@ class BVH:
         rots = quat.unroll(
             quat.from_euler(
                 np.radians(self.data["rotations"]),
-                order=np.tile(
-                    self.data["rot_order"], (self.data["rotations"].shape[0], 1, 1)
-                ),
+                order=np.tile(self.data["rot_order"], (self.data["rotations"].shape[0], 1, 1)),
             ),
             axis=0,
         )
@@ -432,9 +405,7 @@ class BVH:
         ), "load a BVH file first or create a self.data dict with the same structure as the one returned by load(...)"
 
         self.data["rotations"] = np.degrees(
-            quat.to_euler(
-                rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1))
-            )
+            quat.to_euler(rots, order=np.tile(self.data["rot_order"], (rots.shape[0], 1, 1)))
         )
         self.data["positions"] = pos
 
@@ -461,9 +432,7 @@ class BVH:
         rots, pos, _, _, _, _ = self.get_data()
 
         # Update rotation order for all joints
-        new_rot_order = np.array(
-            [[c for c in new_order] for _ in range(len(self.data["names"]))]
-        )
+        new_rot_order = np.array([[c for c in new_order] for _ in range(len(self.data["names"]))])
         self.data["rot_order"] = new_rot_order
 
         # Set data back (converts quaternions to euler angles using new order)
@@ -519,19 +488,14 @@ class BVH:
             f.write("%s{\n" % tab)
             tab += "\t"
             try:
-                end_site_data = data["end_sites"][
-                    np.where(data["end_sites_parents"] == i)[0][0]
-                ]
+                end_site_data = data["end_sites"][np.where(data["end_sites_parents"] == i)[0][0]]
             except ValueError:
                 end_site_data = np.zeros(3)
             except KeyError:
                 end_site_data = np.zeros(3)
             except IndexError:
                 end_site_data = np.zeros(3)
-            f.write(
-                "%sOFFSET %f %f %f\n"
-                % (tab, end_site_data[0], end_site_data[1], end_site_data[2])
-            )
+            f.write("%sOFFSET %f %f %f\n" % (tab, end_site_data[0], end_site_data[1], end_site_data[2]))
             tab = tab[:-1]
             f.write("%s}\n" % tab)
 

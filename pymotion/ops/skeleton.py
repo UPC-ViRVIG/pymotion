@@ -15,8 +15,8 @@ The skeleton is defined by:
 The dispatcher imports backends at module load time. If a library isn't installed,
 its backend will be None and will raise an error at runtime if you try to use it.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 # Import type references and backend modules at module import time
 _TorchTensor = None
@@ -205,9 +205,7 @@ def to_root_dual_quat(rotations, global_pos, parents, offsets):
         The root-centered dual quaternion representation of the skeleton.
     """
     if _TorchTensor is not None and isinstance(rotations, _TorchTensor):
-        return _skeleton_torch.to_root_dual_quat(
-            rotations, global_pos, parents, offsets
-        )
+        return _skeleton_torch.to_root_dual_quat(rotations, global_pos, parents, offsets)
     else:
         return _skeleton_np.to_root_dual_quat(rotations, global_pos, parents, offsets)
 

@@ -8,8 +8,8 @@ regardless of the underlying array library being used.
 The dispatcher imports backends at module load time. If a library isn't installed,
 its backend will be None and will raise an error at runtime if you try to use it.
 """
-from __future__ import annotations
 
+from __future__ import annotations
 
 # Import type references and backend modules at module import time
 _TorchTensor = None
