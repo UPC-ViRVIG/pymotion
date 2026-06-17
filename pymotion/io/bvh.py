@@ -1,6 +1,10 @@
-import numpy as np
-import pymotion.rotations.quat as quat
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
+
 import copy
+import os
+
+import numpy as np
+import pymotion.rotations.quat_np as quat
 
 
 class BVH:
@@ -21,19 +25,21 @@ class BVH:
         """
         self.data = copy.deepcopy(bvh.data)
 
-    def load(self, filename: str):
+    def load(self, filepath: str):
         """
         Reads a BVH file and returns a dictionary with the data.
 
         Parameters
         ----------
-        filename : str
+        filepath : str
             path to the file.
 
         Results
         ------
         self.data : dict
             dictionary with the data.
+            ["filename"] : str
+                name of the file.
             ["names"] : np.array[str]
                 ith-element contain the name of ith-joint.
             ["offsets"] : np.array[n_joints, 3]
@@ -52,8 +58,13 @@ class BVH:
                 local rotations in euler angles with the order specified in rot_order.
             ["frame_time"] : float
                 time between two frames in seconds.
+            ["channels"] : np.array[int]
+                ith-element contain the number of channels of the ith joint.
         """
-        f = open(filename, "r")
+        f = open(filepath, "r")
+        filename = os.path.basename(filepath)
+        filename = filename.split(".")[:-1]
+        filename = ".".join(filename)
 
         names = []
         offsets = []
@@ -126,6 +137,7 @@ class BVH:
                     end_sites = np.array(end_sites)
                     end_sites_parents = np.array(end_sites_parents)
                     rot_order = np.array(rot_order)
+                    channels = np.array(channels)
                     positions = np.tile(offsets, (number_frames, 1)).reshape(number_frames, len(offsets), 3)
                     rotations = np.zeros((number_frames, len(names), 3))
                     continue
@@ -149,12 +161,14 @@ class BVH:
         f.close()
 
         self.data = {
+            "filename": filename,
             "names": names,
             "offsets": offsets,
             "end_sites": end_sites,
             "end_sites_parents": end_sites_parents,
             "parents": parents,
             "rot_order": rot_order,
+            "channels": channels,  # TODO: properly handle different positional channels and orders
             "positions": positions,
             "rotations": rotations,
             "frame_time": frame_time,
@@ -216,7 +230,7 @@ class BVH:
 
             for i in range(self.data["positions"].shape[0]):
                 for j in joint_order:
-                    if j == 0:  # root
+                    if self.data["channels"][j] == 6:  # joint has position and rotation channels
                         f.write(
                             "%f %f %f "
                             % (
@@ -281,7 +295,9 @@ class BVH:
         """
 
         # Identify joints to keep
-        keep_joints = [i for i in range(len(self.data["names"])) if i not in delete_joints]
+        delete_joints_set = set(delete_joints)
+        keep_joints = [i for i in range(len(self.data["names"])) if i not in delete_joints_set]
+        keep_joints_set = set(keep_joints)
         new_to_old = dict(enumerate(keep_joints))
         old_to_new = dict((v, k) for k, v in new_to_old.items())
 
@@ -291,7 +307,7 @@ class BVH:
         new_pos = pos[:, keep_joints, :]
         new_offsets = offsets[keep_joints, :]
         for j in keep_joints:
-            while parents[j] not in keep_joints:
+            while parents[j] not in keep_joints_set:
                 p = parents[j]
                 new_rots[:, old_to_new[j], :] = quat.mul(rots[:, p, :], new_rots[:, old_to_new[j], :])
                 new_pos[:, old_to_new[j], :] = (
@@ -300,12 +316,17 @@ class BVH:
                 new_offsets[old_to_new[j]] = (
                     quat.mul_vec(rots[0, p, :], new_offsets[old_to_new[j]]) + offsets[p]
                 )
-                parents[j] = parents[p]
+                if parents[j] == 0:
+                    # root
+                    parents[j] = j
+                    break
+                else:
+                    parents[j] = parents[p]
 
         # Update parent indices for remaining joints
         new_parents = [0] * len(keep_joints)
         for i, p in enumerate(parents):
-            if i in keep_joints:
+            if i in keep_joints_set:
                 new_parents[old_to_new[i]] = old_to_new[p]
 
         # Update end_sites_parents to reflect the removal of joints
@@ -388,6 +409,35 @@ class BVH:
         )
         self.data["positions"] = pos
 
+    def set_rotation_order(self, new_order: str):
+        """
+        Changes the rotation order of all joints in the BVH.
+        Converts rotations from the current order to the new order.
+
+        Parameters
+        ----------
+        new_order : str
+            New rotation order, e.g., 'xyz', 'zyx', 'zxy', etc.
+            Must be a 3-character string containing 'x', 'y', and 'z'.
+        """
+        new_order = new_order.lower()
+        assert len(new_order) == 3, "Rotation order must be a 3-character string"
+        assert set(new_order) == {
+            "x",
+            "y",
+            "z",
+        }, "Rotation order must contain 'x', 'y', and 'z'"
+
+        # Get current data (converts euler angles to quaternions using current order)
+        rots, pos, _, _, _, _ = self.get_data()
+
+        # Update rotation order for all joints
+        new_rot_order = np.array([[c for c in new_order] for _ in range(len(self.data["names"]))])
+        self.data["rot_order"] = new_rot_order
+
+        # Set data back (converts quaternions to euler angles using new order)
+        self.set_data(rots, pos)
+
     def _save_joint(self, f, data, tab, i, joint_order):
         joint_order.append(i)
 
@@ -404,15 +454,27 @@ class BVH:
                 data["offsets"][i, 2],
             )
         )
-        f.write(
-            "%sCHANNELS 3 %s %s %s\n"
-            % (
-                tab,
-                self.inv_bvh_rot_map[data["rot_order"][i, 0]],
-                self.inv_bvh_rot_map[data["rot_order"][i, 1]],
-                self.inv_bvh_rot_map[data["rot_order"][i, 2]],
+
+        if data["channels"][i] == 6:  # joint has position and rotation channels
+            f.write(
+                "%sCHANNELS 6 Xposition Yposition Zposition %s %s %s \n"
+                % (
+                    tab,
+                    self.inv_bvh_rot_map[self.data["rot_order"][0, 0]],
+                    self.inv_bvh_rot_map[self.data["rot_order"][0, 1]],
+                    self.inv_bvh_rot_map[self.data["rot_order"][0, 2]],
+                )
             )
-        )
+        else:  # joint has only rotation channels
+            f.write(
+                "%sCHANNELS 3 %s %s %s\n"
+                % (
+                    tab,
+                    self.inv_bvh_rot_map[data["rot_order"][i, 0]],
+                    self.inv_bvh_rot_map[data["rot_order"][i, 1]],
+                    self.inv_bvh_rot_map[data["rot_order"][i, 2]],
+                )
+            )
 
         is_end_site = True
 
@@ -430,6 +492,8 @@ class BVH:
             except ValueError:
                 end_site_data = np.zeros(3)
             except KeyError:
+                end_site_data = np.zeros(3)
+            except IndexError:
                 end_site_data = np.zeros(3)
             f.write("%sOFFSET %f %f %f\n" % (tab, end_site_data[0], end_site_data[1], end_site_data[2]))
             tab = tab[:-1]

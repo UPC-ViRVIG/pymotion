@@ -1,66 +1,103 @@
-import numpy as np
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
+
+"""
+Unified time operations wrapper that dispatches to NumPy or PyTorch backends
+based on input tensor types. This provides a single API for time operations
+regardless of the underlying array library being used.
+
+The dispatcher imports backends at module load time. If a library isn't installed,
+its backend will be None and will raise an error at runtime if you try to use it.
+"""
+
+from __future__ import annotations
+
+# Import type references and backend modules at module import time
+_TorchTensor = None
+_time_torch = None
+
+try:
+    import torch
+
+    _TorchTensor = torch.Tensor
+    from . import time_torch as _time_torch
+except ImportError:
+    pass
+
+_NumpyArray = None
+_time_np = None
+
+try:
+    import numpy as np
+
+    _NumpyArray = np.ndarray
+    from . import time_np as _time_np
+except ImportError:
+    pass
 
 
+# Explicit wrapper functions
 def interpolate_positions(
-    sample_times: np.array,
-    original_times: np.array,
-    positions: np.array,
-    axis: int,
-    method: str = "linear",
-) -> np.array:
+    sample_times,
+    original_times,
+    positions,
+    axis=None,
+    dim=None,
+    method="linear",
+):
     """
     Perform linear interpolation of positions at specified sample times.
 
     Parameters
     ----------
-    sample_times : np.array
-        1D array of times at which to interpolate the positions.
-    original_times : np.array
-        1D array of times corresponding to the data in `positions`.
-    positions : np.array[..., [x, y, z]]
-        Positions to interpolate. The array can have any number of dimensions,
+    sample_times : torch.Tensor or np.array
+        1D array/tensor of times at which to interpolate the positions.
+    original_times : torch.Tensor or np.array
+        1D array/tensor of times corresponding to the data in `positions`.
+    positions : torch.Tensor or np.array[..., [x, y, z]]
+        Positions to interpolate. The array/tensor can have any number of dimensions,
         with the positions along the last dimension and the temporal dimension
-        specified by `axis`.
-    axis : int
+        specified by `axis` (for NumPy) or `dim` (for PyTorch).
+    axis : int, optional
         The axis along which the temporal data is stored in `positions`.
+        Used for NumPy arrays. Either `axis` or `dim` must be provided.
+    dim : int, optional
+        The dimension along which the temporal data is stored in `positions`.
+        Used for PyTorch tensors. Either `axis` or `dim` must be provided.
+    method : str, optional
+        Interpolation method. Currently only "linear" is supported. Default is "linear".
 
     Returns
     -------
-    positions : np.array[..., [x, y, z]]
-        Interpolated positions. The array has the same shape as `positions`,
-        except along the `axis` dimension, where the size is equal to the length
+    positions : torch.Tensor or np.array[..., [x, y, z]]
+        Interpolated positions. The array/tensor has the same shape as `positions`,
+        except along the temporal dimension, where the size is equal to the length
         of `sample_times`.
+
+    Notes
+    -----
+    For NumPy arrays, use the `axis` parameter to specify the temporal dimension.
+    For PyTorch tensors, use the `dim` parameter to specify the temporal dimension.
+    If both are provided, the appropriate one for the tensor type will be used.
     """
+    if _TorchTensor is not None and isinstance(sample_times, _TorchTensor):
+        # Use dim parameter for PyTorch tensors
+        if dim is None:
+            if axis is not None:
+                dim = axis
+            else:
+                raise ValueError("Either 'axis' or 'dim' parameter must be provided for PyTorch tensors.")
+        return _time_torch.interpolate_positions(sample_times, original_times, positions, dim, method)
+    else:
+        # Use axis parameter for NumPy arrays
+        if axis is None:
+            if dim is not None:
+                axis = dim
+            else:
+                raise ValueError("Either 'axis' or 'dim' parameter must be provided for NumPy arrays.")
+        return _time_np.interpolate_positions(sample_times, original_times, positions, axis, method)
 
-    assert method == "linear", "Only linear interpolation is supported yet."
-    assert (
-        positions.shape[axis] == original_times.shape[0]
-    ), "Wrong shape of data. Positions along the axis dimension must be equal to the length of original_times."
 
-    # Compute the shapes of the output array
-    positions_shape = (
-        positions.shape[:axis] + (len(sample_times),) + positions.shape[axis + 1 :]
-    )
-
-    # Init array
-    out_positions = np.zeros(positions_shape)
-
-    # Compute coefficients for linear interpolation
-    idxs = np.minimum(
-        np.maximum(np.searchsorted(original_times, sample_times) - 1, 0),
-        original_times.shape[0] - 2,
-    )
-    intervals = original_times[idxs + 1] - original_times[idxs]
-    weights = (sample_times - original_times[idxs]) / intervals
-
-    # Use broadcasting to index along the time axis of positions
-    selector = [slice(np.newaxis)] * (axis + 1)
-    selector.append(Ellipsis)
-    selector[axis] = idxs
-
-    # Perform linear interpolation
-    out_positions = (1 - weights)[..., np.newaxis] * positions[tuple(selector)]
-    selector[axis] = idxs + 1
-    out_positions += weights[..., np.newaxis] * positions[tuple(selector)]
-
-    return out_positions
+# Expose public API
+__all__ = [
+    "interpolate_positions",
+]

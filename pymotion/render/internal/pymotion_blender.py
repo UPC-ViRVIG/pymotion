@@ -1,241 +1,389 @@
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
+
+import math
 import os
 import socket
 import struct
 import sys
 import time
-import bpy
-import bmesh
-import mathutils
+import traceback
 from threading import Thread
 
-# Get command line arguments
-argv = sys.argv
+import bmesh
+import bpy
+import mathutils
 
-# Blender Python scripts usually start with blender executable path and script path as the first two arguments.
-# Arguments passed after "--" start from index where "--" was in the command.
-try:
-    script_arg_index = argv.index("--") + 1
-except ValueError:
-    print("Error: No '--' argument found when starting Blender.")
-    port_number = 2222
-else:
-    if script_arg_index < len(argv):
-        try:
-            port_number_str = argv[script_arg_index]
-            port_number = int(port_number_str)
-        except ValueError:
-            print(f"Error: Invalid port number argument: '{argv[script_arg_index]}'. Expected an integer.")
-            port_number = 2222
-    else:
-        print("Error: Port number argument missing after '--'.")
-        port_number = 2222
-
-HOST = "127.0.0.1"
-PORT = port_number
-CONN = None
-ADDR = None
-SOCKET = None
-MESSAGE_ID = None
-MESSAGE_DATA = None
-MESSAGE_COLOR = None
-MESSAGE_SCALE = None
-FINISH_THREAD = False
-RECEIVE_THREAD = None
-MATERIAL_CACHE = {}
+# --- GLOBAL STATE ---
+# We will store the server state in a dictionary to keep it tidy.
+SERVER_STATE = {
+    "host": "127.0.0.1",
+    "port": 2222,
+    "socket": None,
+    "receive_thread": None,
+    "finish_thread": False,
+    "material_cache": {},
+}
 
 
-def init_socket():
-    global SOCKET, CONN, ADDR
-    if CONN:
-        CONN.close()
-        CONN = None
-    if SOCKET:
-        SOCKET.close()
-        SOCKET = None
-
-    SOCKET = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        SOCKET.bind((HOST, PORT))
-        SOCKET.listen()
-        CONN, ADDR = SOCKET.accept()
-        return True  # Socket initialization successful
-    except Exception as e:
-        print(f"Socket initialization error: {e}")
-        return False  # Socket initialization failed
-
-
+# --- NETWORK THREAD LOGIC ---
 def receive_messages():
-    global FINISH_THREAD, MESSAGE_ID, MESSAGE_DATA, MESSAGE_COLOR, MESSAGE_SCALE, CONN
-    MESSAGE_ID = None
-    MESSAGE_DATA = None
-    MESSAGE_COLOR = None
-    MESSAGE_SCALE = None
-    while not FINISH_THREAD:
-        if CONN is None:  # Check if connection is established
-            if not init_socket():  # Try to re-initialize if no connection
-                time.sleep(1)  # Add a small delay to avoid busy-looping
-                continue  # Keep looping to re-attempt init_socket
-            else:
-                continue  # Wait for connection to be established
+    """Listens for clients and schedules tasks for the main thread."""
+    print("[PyMotion Thread] Receive thread started.")
+    while not SERVER_STATE["finish_thread"]:
+        try:
+            print(
+                f"[PyMotion Thread] Server listening on {SERVER_STATE['host']}:{SERVER_STATE['port']}..."
+            )
+            conn, addr = SERVER_STATE["socket"].accept()
+            print(f"[PyMotion Thread] Accepted connection from {addr}")
 
-        message_id_val = receive_message_id()
-        if message_id_val is None:
-            CONN = None  # Reset connection for re-accepting
-            continue  # Go back to check for new connections/stop thread
+            while not SERVER_STATE["finish_thread"]:
+                # 1. Receive a complete command package
+                command = receive_command(conn)
+                if command is None:
+                    print("[PyMotion Thread] Client disconnected or command invalid.")
+                    conn.close()
+                    break
 
-        MESSAGE_ID = message_id_val
-        if MESSAGE_ID != 0:
-            MESSAGE_DATA, MESSAGE_COLOR, MESSAGE_SCALE = receive_data()
+                # print(f"[PyMotion Thread] Received command with ID: {command[0]}")
 
-    if CONN:
-        CONN.close()
-    if SOCKET:
-        SOCKET.close()
+                # 2. Schedule this command to be run once on the main thread
+                #    The `args` parameter passes our command tuple to the function.
+                bpy.app.timers.register(dummy_callback, first_interval=0)
+                bpy.app.timers.register(
+                    lambda cmd=command: process_single_command(cmd), first_interval=0
+                )
+
+        except Exception as e:
+            print(f"[PyMotion Thread] Error in accept loop: {e}")
+            time.sleep(1)
+    print("[PyMotion Thread] Receive thread finished.")
 
 
-def receive_message_id():
-    global CONN, MESSAGE_ID
+def dummy_callback():
+    # This function does nothing, just wakes up the main thread
+    # This is necessary because after a long time, Blender signals a KeyboardInterrupt and the first
+    # function called will not be executed
+    return None  # Do not repeat
+
+
+def receive_command(conn):
+    """Receives a full command (ID + data) from the client connection."""
     try:
-        if CONN is None:  # Check connection before receiving
-            return None
-
-        id_bytes = CONN.recv(4)
+        # --- Receive ID ---
+        id_bytes = conn.recv(4)
         if not id_bytes:
             return None  # if empty byte object b'' is returned -> client closed the connection
+        conn.sendall(struct.pack("<i", 1))  # ACK ID
+        message_id = struct.unpack("<i", id_bytes)[0]
 
-        while MESSAGE_ID is not None:
-            time.sleep(0.1)  # Wait until MESSAGE_ID is processed
+        # --- Receive Data (if any) ---
+        data, colors, scales = (None, None, None)
+        if not (
+            message_id == 0 or message_id == 6
+        ):  # clear_scene() nad other functions have no data
+            size_data_bytes = conn.recv(4)
+            size_data = struct.unpack("<i", size_data_bytes)[0]
+            size_color_bytes = conn.recv(4)
+            size_color = struct.unpack("<i", size_color_bytes)[0]
+            size_scale_bytes = conn.recv(4)
+            size_scale = struct.unpack("<i", size_scale_bytes)[0]
+            data_type_indicator_bytes = conn.recv(4)
+            data_type_indicator = struct.unpack("<i", data_type_indicator_bytes)[0]
 
-        CONN.sendall(struct.pack("<i", 1))  # Acknowledge ID reception
-        return struct.unpack("<i", id_bytes)[0]
+            conn.sendall(struct.pack("<i", 1))  # ACK Metadata
+
+            # Data
+            if data_type_indicator == 0:  # string
+                data_bytes = conn.recv(size_data)  # Receive string data
+                data = data_bytes.decode("utf-8")
+            elif data_type_indicator == 1:  # float array
+                data_bytes = conn.recv(
+                    4 * size_data
+                )  # Receive float data (4 bytes per float)
+                data = []
+                for i in range(size_data):
+                    data.append(struct.unpack("<f", data_bytes[i * 4 : i * 4 + 4])[0])
+            else:
+                raise ValueError(f"Unknown data type indicator: {data_type_indicator}")
+
+            # Color
+            if size_color > 0:
+                color_bytes = conn.recv(
+                    4 * size_color
+                )  # Receive float data (4 bytes per float)
+                colors = []
+                for i in range(size_color):
+                    colors.append(
+                        struct.unpack("<f", color_bytes[i * 4 : i * 4 + 4])[0]
+                    )
+            else:
+                colors = None
+
+            # Scale
+            if size_scale > 0:
+                scales_bytes = conn.recv(
+                    4 * size_scale
+                )  # Receive float data (4 bytes per float)
+                scales = []
+                for i in range(size_scale):
+                    scales.append(
+                        struct.unpack("<f", scales_bytes[i * 4 : i * 4 + 4])[0]
+                    )
+            else:
+                scales = None
+
+        return (message_id, data, colors, scales)
     except Exception as e:
-        print(f"Error receiving message ID: {e}")
+        print(f"[PyMotion Thread] Failed to receive command: {e}")
         return None
 
 
-def receive_data():
-    global CONN
+# --- MAIN THREAD TASK RUNNER ---
+def process_single_command(command):
+    """This function is executed by the main thread for EACH command."""
     try:
-        if CONN is None:  # Check connection before receiving
-            return None
+        message_id, data, color, scale = command
+        # print(f"[PyMotion Main] Executing command ID: {message_id}")
 
-        size_data_bytes = CONN.recv(4)
-        size_data = struct.unpack("<i", size_data_bytes)[0]
-        size_color_bytes = CONN.recv(4)
-        size_color = struct.unpack("<i", size_color_bytes)[0]
-        size_scale_bytes = CONN.recv(4)
-        size_scale = struct.unpack("<i", size_scale_bytes)[0]
-
-        data_type_indicator_bytes = CONN.recv(4)
-        data_type_indicator = struct.unpack("<i", data_type_indicator_bytes)[0]
-
-        CONN.sendall(struct.pack("<i", 1))  # Acknowledge metadata reception
-
-        # Data
-        if data_type_indicator == 0:  # string
-            data_bytes = CONN.recv(size_data)  # Receive string data
-            data = data_bytes.decode("utf-8")
-        elif data_type_indicator == 1:  # float array
-            data_bytes = CONN.recv(4 * size_data)  # Receive float data (4 bytes per float)
-            data = []
-            for i in range(size_data):
-                data.append(struct.unpack("<f", data_bytes[i * 4 : i * 4 + 4])[0])
+        if message_id == 0:
+            print("[PyMotion Main] Clearing scene")
+            clear_scene()
+        elif message_id == 1:
+            print("[PyMotion Main] Rendering points")
+            render_points(data, color, scale)
+        elif message_id == 2:
+            print("[PyMotion Main] Rendering orientations")
+            render_orientations(data, scale)
+        elif message_id == 3:
+            print("[PyMotion Main] Rendering BVH")
+            render_bvh(data, color, scale)
+        elif message_id == 4:
+            print("[PyMotion Main] Rendering checkerboard floor")
+            render_checkerboard_floor(data)
+        elif message_id == 5:
+            print("[PyMotion Main] Rendering points timeline")
+            render_points_timeline(data, color, scale)
+        elif message_id == 6:
+            print("[PyMotion Main] Setting up rendering")
+            setup_rendering()
         else:
-            raise ValueError(f"Unknown data type indicator: {data_type_indicator}")
+            print(f"[PyMotion Main] Unknown message id {message_id}")
 
-        # Color
-        if size_color > 0:
-            color_bytes = CONN.recv(4 * size_color)  # Receive float data (4 bytes per float)
-            colors = []
-            for i in range(size_color):
-                colors.append(struct.unpack("<f", color_bytes[i * 4 : i * 4 + 4])[0])
-        else:
-            colors = None
+    except Exception:
+        print(f"[PyMotion Main] CRITICAL ERROR while processing command {message_id}:")
+        # Print the full, detailed error traceback to the console
+        traceback.print_exc()
 
-        # Scale
-        if size_scale > 0:
-            scales_bytes = CONN.recv(4 * size_scale)  # Receive float data (4 bytes per float)
-            scales = []
-            for i in range(size_scale):
-                scales.append(struct.unpack("<f", scales_bytes[i * 4 : i * 4 + 4])[0])
-        else:
-            scales = None
-
-        return data, colors, scales
-    except Exception as e:
-        print(f"Error receiving data: {e}")
-        return None
+    # Return None so the timer only runs once and unregisters itself
+    return None
 
 
+# --- BLENDER MAIN THREAD LOGIC ---
+# These functions modify Blender data and must run in the main thread.
+# Render functions (clear_scene, render_points, etc.) go here.
 def clear_scene():
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
+    for col in bpy.data.collections:
+        bpy.data.collections.remove(col)
 
 
-def render_points():
-    global MESSAGE_DATA, MESSAGE_COLOR, MESSAGE_SCALE
-    if MESSAGE_DATA is None or MESSAGE_COLOR is None or MESSAGE_SCALE is None:
+def setup_rendering():
+    scene = bpy.context.scene
+
+    # --- Output Settings ---
+    # Set the container to MPEG-4 and the video codec to H.264 for a standard .mp4 file
+    try:
+        # Blender <= 4.x: use FFMPEG container settings
+        scene.render.image_settings.file_format = "FFMPEG"
+        scene.render.ffmpeg.format = "MPEG4"
+        scene.render.ffmpeg.codec = "H264"
+    except (TypeError, AttributeError):
+        # Blender 5.0+: use media_type to switch to video output
+        # No additional codec configuration needed - Blender 5.0+ handles it automatically
+        scene.render.image_settings.media_type = "VIDEO"
+
+    # --- Color Management Settings ---
+    scene.view_settings.view_transform = "AgX"
+    scene.view_settings.look = "AgX - Very High Contrast"
+    scene.view_settings.exposure = 1.8
+    scene.view_settings.gamma = 0.5
+
+    # --- Sampling Settings ---
+    # Blender 4.x uses BLENDER_EEVEE_NEXT, Blender 5+ uses BLENDER_EEVEE
+    try:
+        scene.render.engine = "BLENDER_EEVEE_NEXT"
+    except TypeError:
+        scene.render.engine = "BLENDER_EEVEE"
+
+    scene.eevee.taa_render_samples = 32  # Render Samples
+    scene.eevee.taa_samples = 32  # Viewport Samples
+
+    # --- World Setup ---
+    if scene.world is None:
+        scene.world = bpy.data.worlds.new("World")
+    world = scene.world
+    world.use_nodes = True
+    bg_node = world.node_tree.nodes.get("Background")
+    if bg_node:
+        bg_node.inputs["Color"].default_value = (0.8, 0.68, 0.67, 1.0)
+        bg_node.inputs["Strength"].default_value = 0.4
+
+    # --- Sun Light Setup ---
+    if "Sun" not in bpy.data.objects:
+        bpy.ops.object.light_add(type="SUN", align="WORLD", location=(0, 0, 0))
+        sun_obj = bpy.context.active_object
+        sun_obj.name = "Sun"
+    sun_obj = bpy.data.objects["Sun"]
+
+    sun_obj.data.color = (1.0, 0.88, 0.7)
+    sun_obj.data.energy = 3.0
+    sun_obj.data.angle = math.radians(5)  # Sun angle for soft shadows
+    sun_obj.rotation_euler = (
+        math.radians(25.399),
+        math.radians(38.7803),
+        math.radians(-0.660154),
+    )
+
+
+def render_points(data, color, scale):
+    if data is None or color is None or scale is None:
         raise ValueError("Render points: Data, color or scale is None.")
 
     positions = []
-    for i in range(0, len(MESSAGE_DATA), 3):
-        pos = MESSAGE_DATA[i : i + 3]
+    for i in range(0, len(data), 3):
+        pos = data[i : i + 3]
         positions.append(mathutils.Vector([pos[0], pos[1], pos[2]]))
 
     colors = []
-    for i in range(0, len(MESSAGE_COLOR), 3):
-        col = MESSAGE_COLOR[i : i + 3]
+    for i in range(0, len(color), 3):
+        col = color[i : i + 3]
         colors.append((col[0], col[1], col[2]))
 
     radius = []
-    for i in range(0, len(MESSAGE_SCALE), 1):
-        rad = MESSAGE_SCALE[i]
+    for i in range(0, len(scale), 1):
+        rad = scale[i]
         radius.append(rad)
 
+    mesh_data = bpy.data.meshes.new("SphereMesh")
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, radius=1)
+    bm.to_mesh(mesh_data)
+    bm.free()
+
+    # Create a new collection for the points
+    points_collection = bpy.data.collections.new("Points")
+    bpy.context.scene.collection.children.link(points_collection)
+
     for i, pos in enumerate(positions):
-        bpy.ops.mesh.primitive_uv_sphere_add(radius=radius[i], location=pos)
-        obj = bpy.context.object
+        obj = bpy.data.objects.new(f"point_{i}", mesh_data)
+        obj.location = pos
+        obj.scale = (radius[i], radius[i], radius[i])
+        points_collection.objects.link(obj)
+        bpy.context.view_layer.objects.active = obj
         obj.name = f"point_{i}"
-        material = get_material(colors[i])
+        material = get_material(colors[i], no_illumination=True)
         if obj.data.materials:
             obj.data.materials[0] = material
+            obj.data = obj.data.copy()
         else:
             obj.data.materials.append(material)
 
 
-def render_orientations():
-    global MESSAGE_DATA, MESSAGE_SCALE
-    if MESSAGE_DATA is None or MESSAGE_SCALE is None:
+def render_points_timeline(data, color, scale):
+    if data is None or color is None or scale is None:
+        raise ValueError("Render points: Data, color or scale is None.")
+
+    frames = int(round(data[0]))
+    data_per_frame = (len(data) - 1) // frames
+
+    positions = [[] for _ in range(frames)]
+    for i in range(1, len(data), 3):
+        current_frame = (i - 1) // data_per_frame
+        pos = data[i : i + 3]
+        positions[current_frame].append(mathutils.Vector([pos[0], pos[1], pos[2]]))
+
+    colors = []
+    for i in range(0, len(color), 3):
+        col = color[i : i + 3]
+        colors.append((col[0], col[1], col[2]))
+
+    radius = []
+    for i in range(0, len(scale), 1):
+        rad = scale[i]
+        radius.append(rad)
+
+    # Initialize the points
+    points = []
+    mesh_data = bpy.data.meshes.new("SphereMesh")
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, radius=1)
+    bm.to_mesh(mesh_data)
+    bm.free()
+
+    # Create a new collection for the points
+    points_collection = bpy.data.collections.new("PointsTimeline")
+    bpy.context.scene.collection.children.link(points_collection)
+
+    for i, point in enumerate(positions[0]):
+        obj = bpy.data.objects.new(f"point_t_{i}", mesh_data)
+        obj.location = point
+        obj.scale = (radius[i], radius[i], radius[i])
+        points_collection.objects.link(obj)
+        bpy.context.view_layer.objects.active = obj
+        obj.name = f"point_t_{i}"
+        material = get_material(colors[i], no_illumination=True)
+        if obj.data.materials:
+            obj.data.materials[0] = material
+            obj.data = obj.data.copy()
+        else:
+            obj.data.materials.append(material)
+        points.append(obj)
+
+    # Assign their position based on the frames
+    for f in range(frames):
+        for i, point in enumerate(positions[f]):
+            points[i].location = point
+            points[i].keyframe_insert(data_path="location", frame=f + 1)
+
+
+def render_orientations(data, scale):
+    if data is None or scale is None:
         raise ValueError("Render orientations: Data or scale is None.")
 
     quaternions = []
     positions = []
-    for i in range(0, len(MESSAGE_DATA), 7):  # 3 (positions) + 4 (quaternions)
-        pos = MESSAGE_DATA[i : i + 3]
-        quat = MESSAGE_DATA[i + 3 : i + 7]
+    for i in range(0, len(data), 7):  # 3 (positions) + 4 (quaternions)
+        pos = data[i : i + 3]
+        quat = data[i + 3 : i + 7]
         quaternions.append(mathutils.Quaternion([quat[0], quat[1], quat[2], quat[3]]))
         positions.append(mathutils.Vector([pos[0], pos[1], pos[2]]))
 
     scales = []
-    for i in range(0, len(MESSAGE_SCALE), 1):
-        scale = MESSAGE_SCALE[i]
-        scales.append(scale)
+    for i in range(0, len(scale), 1):
+        scale_i = scale[i]
+        scales.append(scale_i)
+
+    # Create a new collection
+    orientations_collection = bpy.data.collections.new(name="Orientations")
+    bpy.context.scene.collection.children.link(orientations_collection)
 
     for i, quat in enumerate(quaternions):
         bpy.ops.object.empty_add(type="ARROWS", location=positions[i])
         obj = bpy.context.object
+        orientations_collection.objects.link(obj)
         obj.name = "orientation_{}".format(i)
         obj.rotation_mode = "QUATERNION"
         obj.rotation_quaternion = quat
         obj.scale = (scales[i], scales[i], scales[i])
 
 
-def render_bvh():
-    global MESSAGE_DATA, MESSAGE_COLOR, MESSAGE_SCALE
-    if MESSAGE_DATA is None or MESSAGE_COLOR is None or MESSAGE_SCALE is None:
+def render_bvh(data, color, scale):
+    if data is None or color is None or scale is None:
         raise ValueError("Render BVH: Data, color or scale is None.")
 
-    data = MESSAGE_DATA.split(".bvh")
+    data = data.split(".bvh")
     if len(data) != 2:
         raise ValueError("Invalid BVH data format.")
     bvh_path = data[0] + ".bvh"
@@ -243,8 +391,12 @@ def render_bvh():
     end_joints = data[:-2]
     axis_forward = data[-2]
     axis_up = data[-1]
-    color = (MESSAGE_COLOR[0], MESSAGE_COLOR[1], MESSAGE_COLOR[2])
-    should_delete_file = MESSAGE_SCALE[0] == 1
+    color = (
+        color[0],
+        color[1],
+        color[2],
+    )
+    should_delete_file = scale[0] == 1
 
     bpy.data.scenes["Scene"].frame_end = 1
     bpy.ops.object.select_all(action="DESELECT")
@@ -268,41 +420,66 @@ def render_bvh():
     generate_rig_representation(bpy.context.active_object, color, end_joints=end_joints)
 
 
-def render_checkerboard_floor():
-    global MESSAGE_DATA
-    if MESSAGE_DATA is None:
+def render_checkerboard_floor(data):
+    if data is None:
         raise ValueError("Render checkerboard floor: Data is None.")
 
-    plane_size = MESSAGE_DATA[0]
-    checker_size = MESSAGE_DATA[1]
-    color1 = (MESSAGE_DATA[2], MESSAGE_DATA[3], MESSAGE_DATA[4], 1.0)
-    color2 = (MESSAGE_DATA[5], MESSAGE_DATA[6], MESSAGE_DATA[7], 1.0)
+    plane_size = data[0]
+    checker_size = data[1]
+    color1 = (
+        data[2],
+        data[3],
+        data[4],
+        1.0,
+    )
+    color2 = (
+        data[5],
+        data[6],
+        data[7],
+        1.0,
+    )
 
     create_checkerboard_plane(plane_size, checker_size, color1, color2)
 
 
-def get_material(color_rgb):  # Function to get or create material
-    global MATERIAL_CACHE
+def get_material(
+    color_rgb, no_illumination=False
+):  # Function to get or create material
+    if color_rgb in SERVER_STATE["material_cache"]:
+        return SERVER_STATE["material_cache"][color_rgb]  # Reuse existing material
 
-    if color_rgb in MATERIAL_CACHE:
-        return MATERIAL_CACHE[color_rgb]  # Reuse existing material
-
-    material = bpy.data.materials.new(name=f"PyMotionMat_{color_rgb}")  # Create new material
+    material = bpy.data.materials.new(
+        name=f"PyMotionMat_{color_rgb}"
+    )  # Create new material
     material.use_nodes = True
-    principled_bsdf = material.node_tree.nodes["Principled BSDF"]
-    principled_bsdf.inputs["Base Color"].default_value = (
-        color_rgb[0],
-        color_rgb[1],
-        color_rgb[2],
-        1.0,
-    )  # RGBA (alpha 1.0)
-    MATERIAL_CACHE[color_rgb] = material  # Store in cache
+    if no_illumination:
+        background_node = material.node_tree.nodes.new(type="ShaderNodeBackground")
+        background_node.inputs["Color"].default_value = (
+            color_rgb[0],
+            color_rgb[1],
+            color_rgb[2],
+            1.0,
+        )  # RGBA (alpha 1.0)
+        material.node_tree.links.new(
+            material.node_tree.nodes["Material Output"].inputs["Surface"],
+            background_node.outputs["Background"],
+        )
+    else:
+        principled_bsdf = material.node_tree.nodes["Principled BSDF"]
+        principled_bsdf.inputs["Base Color"].default_value = (
+            color_rgb[0],
+            color_rgb[1],
+            color_rgb[2],
+            1.0,
+        )  # RGBA (alpha 1.0)
+
+    SERVER_STATE["material_cache"][color_rgb] = material  # Store in cache
     return material
 
 
 def generate_rig_representation(armature_obj, color, end_joints=None):
     if armature_obj.type != "ARMATURE":
-        print("Selected object is not an armature!")
+        print("[PyMotion Blender] Selected object is not an armature!")
         return
 
     bpy.ops.object.mode_set(mode="OBJECT")
@@ -318,10 +495,22 @@ def generate_rig_representation(armature_obj, color, end_joints=None):
 
     bones = armature_obj.data.bones
     for bone in bones:
+        if "twist" in bone.name:  # HARDCODED
+            continue
+
         head_location = armature_obj.matrix_world @ bone.head_local
         tail_location = armature_obj.matrix_world @ bone.tail_local
 
-        sphere_head = create_sphere_at_location(head_location, 0.04, bone.name)
+        base_head_radius = 0.04
+        base_cylinder_radius = 0.02
+
+        distance_factor = (head_location - tail_location).length / 0.2
+        distance_factor = min(1, math.exp(distance_factor) - 1)
+        # TODO: ideally the distance_factor for the sphere is a mix between the previous bone and the current one
+
+        sphere_head = create_sphere_at_location(
+            head_location, base_head_radius * distance_factor, bone.name
+        )
         sphere_head.data.materials.append(material)
         sphere_current_collection = sphere_head.users_collection[0]
         # Link the new object to the collection
@@ -333,7 +522,13 @@ def generate_rig_representation(armature_obj, color, end_joints=None):
         if end_joints is not None and bone.name in end_joints:
             continue
 
-        cylinder = create_cylinder_between_points(bone, head_location, tail_location, 0.02, bone.name)
+        cylinder = create_cylinder_between_points(
+            bone,
+            head_location,
+            tail_location,
+            base_cylinder_radius * distance_factor,
+            bone.name,
+        )
         cylinder.data.materials.append(material)
         cylinder_current_collection = cylinder.users_collection[0]
         rig_collection.objects.link(cylinder)
@@ -355,7 +550,9 @@ def create_sphere_at_location(location, radius=0.1, name="Sphere"):
     obj.select_set(True)
 
     bm = bmesh.new()
-    bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=16, radius=radius, calc_uvs=True)
+    bmesh.ops.create_uvsphere(
+        bm, u_segments=32, v_segments=16, radius=radius, calc_uvs=True
+    )
     bm.to_mesh(mesh)
     bm.free()
 
@@ -376,15 +573,19 @@ def create_cylinder_between_points(bone, p1, p2, radius=0.2, name="Cylinder"):
     obj.select_set(True)
 
     bm = bmesh.new()
-    bmesh.ops.create_cone(bm, cap_ends=True, segments=5, radius1=radius, radius2=radius, depth=length)
+    bmesh.ops.create_cone(
+        bm, cap_ends=True, segments=5, radius1=radius, radius2=radius, depth=length
+    )
     bm.to_mesh(mesh)
     bm.free()
 
     # Position it
     obj.location = (p1 + p2) / 2
-    rotation_difference = direction.rotation_difference(mathutils.Vector((0, 0, 1)))
-    r = rotation_difference.to_euler()
-    obj.rotation_euler = mathutils.Vector((-r.x, -r.y, -r.z))
+    # Align local Z to direction
+    up = mathutils.Vector((0, 0, 1))
+    quat = up.rotation_difference(direction.normalized())
+    obj.rotation_mode = "QUATERNION"
+    obj.rotation_quaternion = quat
 
     return obj
 
@@ -395,7 +596,9 @@ def setup_constraints(obj, target_bone_name, armature_object):
     constraint.subtarget = target_bone_name
 
 
-def create_checkerboard_plane(plane_size=2, checker_size=1, color1=(1, 1, 1, 1), color2=(0, 0, 0, 1)):
+def create_checkerboard_plane(
+    plane_size=2, checker_size=1, color1=(1, 1, 1, 1), color2=(0, 0, 0, 1)
+):
     """
     Create a plane with a checkerboard pattern in Blender.
 
@@ -435,90 +638,59 @@ def create_checkerboard_plane(plane_size=2, checker_size=1, color1=(1, 1, 1, 1),
     return plane
 
 
-def check_messages():
-    global MESSAGE_ID, MESSAGE_DATA, MESSAGE_COLOR, MESSAGE_SCALE
-    if MESSAGE_ID is not None:
-        if MESSAGE_ID == 0:
-            clear_scene()
-        elif MESSAGE_ID == 1:
-            render_points()
-        elif MESSAGE_ID == 2:
-            render_orientations()
-        elif MESSAGE_ID == 3:
-            render_bvh()
-        elif MESSAGE_ID == 4:
-            render_checkerboard_floor()
-        else:
-            print(f"Unknown message id {MESSAGE_ID}")
-        MESSAGE_ID = None
-        MESSAGE_DATA = None
-        MESSAGE_COLOR = None
-        MESSAGE_SCALE = None
-    return 0.1  # Timer interval (check for messages every 0.1 seconds)
-
-
+# --- SERVER STARTUP AND REGISTRATION ---
 def start_server():
-    global FINISH_THREAD, RECEIVE_THREAD
-    if not init_socket():  # Initialize socket and check for success
-        print("Failed to initialize socket. Server not starting.")
+    """Initializes the socket and starts the network thread."""
+    if SERVER_STATE["receive_thread"] and SERVER_STATE["receive_thread"].is_alive():
+        print("[PyMotion Main] Server is already running.")
         return
 
-    FINISH_THREAD = False
-    RECEIVE_THREAD = Thread(target=receive_messages, daemon=True)
-    RECEIVE_THREAD.start()
-    bpy.app.timers.register(check_messages)  # Start timer to periodically check for messages
-    clear_scene()
+    try:
+        port_str = sys.argv[sys.argv.index("--") + 1]
+        SERVER_STATE["port"] = int(port_str)
+    except (ValueError, IndexError):
+        print(f"[PyMotion Main] Using default port {SERVER_STATE['port']}")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind((SERVER_STATE["host"], SERVER_STATE["port"]))
+        sock.listen()
+        SERVER_STATE["socket"] = sock
+    except Exception as e:
+        print(f"[PyMotion Main] FATAL: Could not bind to socket: {e}")
+        return
+
+    SERVER_STATE["finish_thread"] = False
+    thread = Thread(target=receive_messages, daemon=True)
+    thread.start()
+    SERVER_STATE["receive_thread"] = thread
+    print("[PyMotion Main] Server started successfully.")
 
 
-def stop_server():
-    global FINISH_THREAD, RECEIVE_THREAD
-    FINISH_THREAD = True
-    if RECEIVE_THREAD:
-        RECEIVE_THREAD.join(timeout=2)  # Wait for thread to finish (with timeout)
-        if RECEIVE_THREAD.is_alive():
-            print("Warning: Receive thread did not terminate gracefully.")
-    if CONN:
-        CONN.close()
-    if SOCKET:
-        SOCKET.close()
-
-
-class StartPyMotionServerOperator(bpy.types.Operator):
-    bl_idname = "object.start_pymotion_server"
-    bl_label = "Start PyMotion Server"
-
-    def execute(self, context):
-        start_server()
-        return {"FINISHED"}
-
-
-class StopPyMotionServerOperator(bpy.types.Operator):
-    bl_idname = "object.stop_pymotion_server"
-    bl_label = "Stop PyMotion Server"
-
-    def execute(self, context):
-        stop_server()
-        return {"FINISHED"}
-
-
-def menu_func(self, context):
-    layout = self.layout
-    layout.operator(StartPyMotionServerOperator.bl_idname, text="Start PyMotion Server")
-    layout.operator(StopPyMotionServerOperator.bl_idname, text="Stop PyMotion Server")
+# We don't need the full Operator class anymore, but we need a way to register the script
+# This is now much simpler.
+class PyMotionPreferences(bpy.types.AddonPreferences):
+    bl_idname = __name__
 
 
 def register():
-    bpy.utils.register_class(StartPyMotionServerOperator)
-    bpy.utils.register_class(StopPyMotionServerOperator)
-    bpy.types.VIEW3D_MT_object.append(menu_func)
+    start_server()
 
 
 def unregister():
-    bpy.utils.unregister_class(StartPyMotionServerOperator)
-    bpy.utils.unregister_class(StopPyMotionServerOperator)
-    bpy.types.VIEW3D_MT_object.remove(menu_func)
+    print("[PyMotion Main] Unregistering and stopping server.")
+    SERVER_STATE["finish_thread"] = True
+    # Unblock the accept() call
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as dummy_socket:
+            dummy_socket.connect((SERVER_STATE["host"], SERVER_STATE["port"]))
+    except:
+        pass
+    if SERVER_STATE["socket"]:
+        SERVER_STATE["socket"].close()
 
 
 if __name__ == "__main__":
-    register()
+    # When Blender starts with -P, this block runs.
     start_server()

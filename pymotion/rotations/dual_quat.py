@@ -1,121 +1,132 @@
-import numpy as np
-from . import quat
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
 
 """
+Unified dual quaternion operations wrapper that dispatches to NumPy or PyTorch backends
+based on input tensor types. This provides a single API for dual quaternion operations
+regardless of the underlying array library being used.
+
 Dual quaternions are represented as arrays of shape [..., 8]
 where the last dimension is the dual quaternion representation.
 The first 4 elements are the real part and the last 4 elements are the dual part.
 [..., [w_r, x_r, y_r, z_r, w_d, x_d, y_d, z_d]]
+
+The dispatcher imports backends at module load time. If a library isn't installed,
+its backend will be None and will raise an error at runtime if you try to use it.
 """
 
+from __future__ import annotations
 
-def from_rotation_translation(rotations: np.array, translations: np.array) -> np.array:
+# Import type references and backend modules at module import time
+_TorchTensor = None
+_dual_quat_torch = None
+
+try:
+    import torch
+
+    _TorchTensor = torch.Tensor
+    from . import dual_quat_torch as _dual_quat_torch
+except ImportError:
+    pass
+
+_NumpyArray = None
+_dual_quat_np = None
+
+try:
+    import numpy as np
+
+    _NumpyArray = np.ndarray
+    from . import dual_quat_np as _dual_quat_np
+except ImportError:
+    pass
+
+
+# Explicit wrapper functions with full documentation
+def from_rotation_translation(rotations, translations):
     """
     Convert the rotations (quaternions) and translation (3D vectors) information to dual quaternions.
 
     Parameters
     ----------
-    rotations: np.array[..., [w, x, y, z]]]
-    translations : np.array[..., 3]
+    rotations : torch.Tensor or np.array[..., [w, x, y, z]]
+        Rotation quaternions
+    translations : torch.Tensor or np.array[..., 3]
+        Translation vectors
 
     Returns
     -------
-    dq : np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Dual quaternions
     """
-    # dual quaternion (sigma) = qr + qd (+ is not an addition, but concatenation)
-    # real part of dual quaternions represent rotations
-    # and is represented as a conventional unit quaternion
-    q_r = rotations
-    # dual part of dual quaternions represent translations
-    # t is a pure quaternion (0, x, y, z)
-    # q_d = 0.5 * eps * t * q_r
-    t = np.zeros((translations.shape[:-1] + (4,)))
-    t[..., 1:] = translations
-    q_d = 0.5 * quat.mul(t, q_r)
-    dq = np.concatenate((q_r, q_d), axis=-1)
-    return dq
+    if _TorchTensor is not None and isinstance(rotations, _TorchTensor):
+        return _dual_quat_torch.from_rotation_translation(rotations, translations)
+    else:
+        return _dual_quat_np.from_rotation_translation(rotations, translations)
 
 
-def from_translation(translations: np.array) -> np.array:
+def from_translation(translations):
     """
     Convert a translation to a dual quaternion.
 
     Parameters
     ----------
-    translations : np.array[..., 3]
+    translations : torch.Tensor or np.array[..., 3]
+        Translation vectors
 
     Returns
     -------
-    dual_quats : np.array[..., 8]
+    dual_quats : torch.Tensor or np.array[..., 8]
+        Dual quaternions
     """
-    dual_quats = np.zeros((translations.shape[:-1] + (8,)))
-    # real part of dual quaternions represent rotations
-    # and is represented as a conventional unit quaternion
-    dual_quats[..., 0:1] = 1
-    # dual part of dual quaternions represent translations
-    # t is a pure quaternion (0, x, y, z)
-    # q_d = 0.5 * eps * t * q_r (q_r = 1, thus, q_d = 0.5 * eps * t)
-    dual_quats[..., 5:] = translations * 0.5
-    return dual_quats
+    if _TorchTensor is not None and isinstance(translations, _TorchTensor):
+        return _dual_quat_torch.from_translation(translations)
+    else:
+        return _dual_quat_np.from_translation(translations)
 
 
-def to_rotation_translation(dq: np.array) -> np.array:
+def to_rotation_translation(dq):
     """
     Convert a dual quaternion to the rotations (quaternions) and translations (3D vectors).
 
     Parameters
     ----------
-    dq: np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Dual quaternions
 
     Returns
     -------
-    rotations: np.array[..., [w, x, y, z]]]
-    translations: np.array[..., 3]
+    rotations : torch.Tensor or np.array[..., [w, x, y, z]]
+        Rotation quaternions
+    translations : torch.Tensor or np.array[..., 3]
+        Translation vectors
     """
-    dq = dq.copy()
-    q_r = dq[..., :4]
-    # rotations can ge get directly from the real part of the dual quaternion
-    rotations = q_r
-    q_d = dq[..., 4:]
-    # the translation (pure quaternion) t = 2 * q_d * q_r*
-    # where q_r* is the conjugate of q_r
-    translations = (2 * quat.mul(q_d, quat.conjugate(q_r)))[..., 1:]
-    return rotations, translations
+    if _TorchTensor is not None and isinstance(dq, _TorchTensor):
+        return _dual_quat_torch.to_rotation_translation(dq)
+    else:
+        return _dual_quat_np.to_rotation_translation(dq)
 
 
-def normalize(dq: np.array) -> np.array:
+def normalize(dq):
     """
     Normalize the dual quaternion to unit length and make sure that
     the dual part is orthogonal to the real part (unit dual quaternion).
 
     Parameters
     ----------
-    dq: np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Dual quaternions
 
     Returns
     -------
-    dq: np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Normalized dual quaternions
     """
-    dq = dq.copy()
-    q_r = dq[..., :4]
-    q_d = dq[..., 4:]
-    norm = np.linalg.norm(q_r, axis=-1)
-    qnorm = np.stack((norm, norm, norm, norm), axis=-1)
-    q_r_normalized = q_r / qnorm
-    q_d_normalized = q_d / qnorm
-    if not is_unit(np.concatenate((q_r_normalized, q_d_normalized), axis=-1)):
-        # make sure that the dual quaternion is orthogonal to the real quaternion
-        dot_q_r_q_d = np.sum(q_r * q_d, axis=-1)  # dot product of q_r and q_d
-        q_d_normalized_ortho = q_d_normalized - (
-            q_r_normalized * (dot_q_r_q_d / (norm * norm))[..., np.newaxis]
-        )
-        dq = np.concatenate((q_r_normalized, q_d_normalized_ortho), axis=-1)
+    if _TorchTensor is not None and isinstance(dq, _TorchTensor):
+        return _dual_quat_torch.normalize(dq)
     else:
-        dq = np.concatenate((q_r_normalized, q_d_normalized), axis=-1)
-    return dq
+        return _dual_quat_np.normalize(dq)
 
 
-def is_unit(dq: np.array, atol: float = 1e-03) -> bool:
+def is_unit(dq, atol=1e-03):
     """
     Check if the dual quaternion is a unit one.
     A unit dual quaternion satisfies two properties:
@@ -124,19 +135,23 @@ def is_unit(dq: np.array, atol: float = 1e-03) -> bool:
 
     Parameters
     ----------
-    dq: np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Dual quaternions
+    atol : float, optional
+        Absolute tolerance for the check. Default is 1e-03.
+
+    Returns
+    -------
+    is_unit : bool
+        True if the dual quaternion is a unit one
     """
-    q_r = dq[..., :4]
-    q_d = dq[..., 4:]
-    sqr_norm_q_r = np.sum(q_r * q_r, axis=-1)
-    if np.isclose(sqr_norm_q_r, 0).all():
-        return True
-    rot_normalized = np.isclose(sqr_norm_q_r, 1).all()
-    trans_normalized = np.isclose(np.sum(q_r * q_d, axis=-1), 0, atol=atol).all()
-    return rot_normalized and trans_normalized
+    if _TorchTensor is not None and isinstance(dq, _TorchTensor):
+        return _dual_quat_torch.is_unit(dq, atol)
+    else:
+        return _dual_quat_np.is_unit(dq, atol)
 
 
-def unroll(dq: np.array, axis: int) -> np.array:
+def unroll(dq, axis):
     """
     Enforce dual quaternion continuity across the time dimension by selecting
     the representation (dq or -dq) with minimal distance (or, equivalently, maximal dot product)
@@ -144,24 +159,28 @@ def unroll(dq: np.array, axis: int) -> np.array:
 
     Parameters
     ----------
-    dq : np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Dual quaternions
     axis : int
-        unroll axis (e.g., frames axis)
+        Unroll axis (e.g., frames axis)
 
     Returns
     -------
-    dq : np.array[..., 8]
+    dq : torch.Tensor or np.array[..., 8]
+        Unrolled dual quaternions
     """
-    dq = dq.swapaxes(0, axis)
-    q_r = dq[..., :4]
-    # start with the second quaternion since
-    # we keep the cover of the first one
-    for i in range(1, len(q_r)):
-        # distance (dot product) between the previous and current quaternion
-        d0 = np.sum(q_r[i] * q_r[i - 1], axis=-1)
-        # distance (dot product) between the previous and flipped current quaternion
-        d1 = np.sum(-q_r[i] * q_r[i - 1], axis=-1)
-        # if the distance with the flipped quaternion is smaller, use it
-        dq[i][d0 < d1] = -dq[i][d0 < d1]
-    dq = dq.swapaxes(0, axis)
-    return dq
+    if _TorchTensor is not None and isinstance(dq, _TorchTensor):
+        return _dual_quat_torch.unroll(dq, axis)
+    else:
+        return _dual_quat_np.unroll(dq, axis)
+
+
+# Expose public API
+__all__ = [
+    "from_rotation_translation",
+    "from_translation",
+    "to_rotation_translation",
+    "normalize",
+    "is_unit",
+    "unroll",
+]

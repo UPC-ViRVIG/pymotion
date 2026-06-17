@@ -41,9 +41,9 @@ class TestOrtho6D:
         t_q_t = torch.cat([torch.from_numpy(q_id), q2_t], dim=-2)
         q = np.concatenate([q_id, q], axis=-2)
         q_t = torch.cat([torch.from_numpy(q_id), q_t], dim=-2)
-        t_q = quat.unroll(t_q, axis=-2)
+        t_q = quat.unroll(t_q, dim=-2)
         t_q_t = quat_torch.unroll(t_q_t, dim=-2)
-        q = quat.unroll(q, axis=-2)
+        q = quat.unroll(q, dim=-2)
         q_t = quat_torch.unroll(q_t, dim=-2)
         # create rotation matrices from ortho6D
         r2 = sixd.to_matrix(o)

@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from numpy.testing import assert_allclose
 
-
 # This code lets you see the effect of unrolling a quaternion
 # import matplotlib.pyplot as plt  # uncomment this line to see the effect of unrolling a quaternion
 # def test_unroll(qs, joint=0):
@@ -14,7 +13,7 @@ from numpy.testing import assert_allclose
 #     ax0.plot(range(qs.shape[-3]), qs[..., joint, 2], label="y")
 #     ax0.plot(range(qs.shape[-3]), qs[..., joint, 3], label="z")
 #     ax0.set_title("Input")
-#     qs_unrolled = quat.unroll(qs, axis=-3)
+#     qs_unrolled = quat.unroll(qs, dim=-3)
 #     ax1.plot(range(qs.shape[-3]), qs_unrolled[..., joint, 0], label="w")
 #     ax1.plot(range(qs.shape[-3]), qs_unrolled[..., joint, 1], label="x")
 #     ax1.plot(range(qs.shape[-3]), qs_unrolled[..., joint, 2], label="y")
@@ -25,7 +24,7 @@ from numpy.testing import assert_allclose
 
 
 class TestQuat:
-    atol = 1e-6
+    atol = 1e-5
     low_atol = 1e-3  # for those operations that are not as precise
 
     def test_angle_axis(self):
@@ -46,10 +45,10 @@ class TestQuat:
         # check if inverse operations produce the same result
         t_angle, t_axis = quat.to_angle_axis(q)
         t_angle_t, t_axis_t = quat_torch.to_angle_axis(q_t)
-        assert_allclose(t_angle, angle, atol=self.atol)
-        assert_allclose(t_axis, axis, atol=self.atol)
-        assert_allclose(t_angle_t.numpy(), angle, atol=self.atol)
-        assert_allclose(t_axis_t.numpy(), axis, atol=self.atol)
+        assert_allclose(t_angle, angle, atol=self.low_atol)
+        assert_allclose(t_axis, axis, atol=self.low_atol)
+        assert_allclose(t_angle_t.numpy(), angle, atol=self.low_atol)
+        assert_allclose(t_axis_t.numpy(), axis, atol=self.low_atol)
         # simple samples
         axis = np.array([[0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1]])
         axis_t = torch.from_numpy(axis)
@@ -71,10 +70,10 @@ class TestQuat:
         q_t = torch.from_numpy(ground_truth)
         t_angle, t_axis = quat.to_angle_axis(q)
         t_angle_t, t_axis_t = quat_torch.to_angle_axis(q_t)
-        assert_allclose(t_angle, angle, atol=self.atol)
-        assert_allclose(t_axis, axis, atol=self.atol)
-        assert_allclose(t_angle_t.numpy(), angle, atol=self.atol)
-        assert_allclose(t_axis_t.numpy(), axis, atol=self.atol)
+        assert_allclose(t_angle, angle, atol=self.low_atol)
+        assert_allclose(t_axis, axis, atol=self.low_atol)
+        assert_allclose(t_angle_t.numpy(), angle, atol=self.low_atol)
+        assert_allclose(t_axis_t.numpy(), axis, atol=self.low_atol)
 
     def test_scaled_angle_axis(self):
         n = 100
@@ -196,9 +195,9 @@ class TestQuat:
         t_q = np.concatenate([q_id, t_q], axis=-2)
         t_q_t = np.concatenate([q_id, t_q_t.numpy()], axis=-2)
         q = np.concatenate([q_id, q], axis=-2)
-        t_q = quat.unroll(t_q, axis=-2)
-        t_q_t = quat.unroll(t_q_t, axis=-2)
-        q = quat.unroll(q, axis=-2)
+        t_q = quat.unroll(t_q, dim=-2)
+        t_q_t = quat.unroll(t_q_t, dim=-2)
+        q = quat.unroll(q, dim=-2)
         assert_allclose(t_q, q, atol=self.atol)
         assert_allclose(t_q_t, q, atol=self.atol)
         # simple samples

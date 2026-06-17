@@ -1,52 +1,87 @@
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
+
+"""
+Unified quaternion operations wrapper that dispatches to NumPy or PyTorch backends
+based on input tensor types. This provides a single API for quaternion operations
+regardless of the underlying array library being used.
+
+The dispatcher imports backends at module load time. If a library isn't installed,
+its backend will be None and will raise an error at runtime if you try to use it.
+"""
+
 from __future__ import annotations
-import numpy as np
-import pymotion.ops.vector as vec
+
+# Import type references and backend modules at module import time
+_TorchTensor = None
+_quat_torch = None
+
+try:
+    import torch
+
+    _TorchTensor = torch.Tensor
+    from . import quat_torch as _quat_torch
+except ImportError:
+    pass
+
+_NumpyArray = None
+_quat_np = None
+
+try:
+    import numpy as np
+
+    _NumpyArray = np.ndarray
+    from . import quat_np as _quat_np
+except ImportError:
+    pass
 
 
-def from_scaled_angle_axis(scaledaxis: np.array) -> np.array:
+# Explicit wrapper functions
+def from_scaled_angle_axis(scaledaxis):
     """
     Create a quaternion from an scaled angle-axis representation.
 
     Parameters
     ----------
-    scaledaxis : np.array[..., [x,y,z]]
+    scaledaxis : torch.Tensor or np.array[..., [x,y,z]]
         axis [x,y,z] of rotation where magnitude is the angle of rotation
 
     Returns
     -------
-    quat : np.array[..., [w,x,y,z]]
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    angle = np.linalg.norm(scaledaxis, axis=-1)[..., np.newaxis]
-    axis = scaledaxis / angle
-    return from_angle_axis(angle, axis)
+    if _TorchTensor is not None and isinstance(scaledaxis, _TorchTensor):
+        return _quat_torch.from_scaled_angle_axis(scaledaxis)
+    else:
+        return _quat_np.from_scaled_angle_axis(scaledaxis)
 
 
-def from_angle_axis(angle: np.array, axis: np.array) -> np.array:
+def from_angle_axis(angle, axis):
     """
     Create a quaternion from an angle-axis representation.
 
     Parameters
     ----------
-    angle : np.array[..., angle] in radians.
-    axis : np.array[..., [x,y,z]]
+    angle : torch.Tensor or np.array[..., angle] in radians.
+    axis : torch.Tensor or np.array[..., [x,y,z]]
         normalized axis [x,y,z] of rotation
 
     Returns
     -------
-    quat : np.array[..., [w,x,y,z]]
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    c = np.cos(angle / 2.0)
-    s = np.sin(angle / 2.0)
-    return np.concatenate((c, s * axis), axis=-1)
+    if _TorchTensor is not None and isinstance(angle, _TorchTensor):
+        return _quat_torch.from_angle_axis(angle, axis)
+    else:
+        return _quat_np.from_angle_axis(angle, axis)
 
 
-def from_euler(euler: np.array, order: np.array) -> np.array:
+def from_euler(euler, order):
     """
     Create a quaternion from an euler representation with a specified order.
 
     Parameters
     ----------
-    euler : np.array[..., [e0, e1, e2]]
+    euler : torch.Tensor or np.array[..., [e0, e1, e2]]
         euler angles in radians
     order : np.array[..., ['x'|'y'|'z', 'x'|'y'|'z', 'x'|'y'|'z']]
         order of the euler angles
@@ -54,376 +89,231 @@ def from_euler(euler: np.array, order: np.array) -> np.array:
 
     Returns
     -------
-    quat : np.array[..., [w,x,y,z]]
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-
-    assert (
-        euler.shape[:-1] == order.shape[:-1]
-    ), "euler and order must have the same shape except for the last dimension"
-
-    axis = {
-        "x": np.array([1, 0, 0]),
-        "y": np.array([0, 1, 0]),
-        "z": np.array([0, 0, 1]),
-    }
-
-    q0 = from_angle_axis(
-        euler[..., 0:1],
-        np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 0:1]),
-    )
-    q1 = from_angle_axis(
-        euler[..., 1:2],
-        np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 1:2]),
-    )
-    q2 = from_angle_axis(
-        euler[..., 2:3],
-        np.apply_along_axis(lambda x: axis[x.item()], -1, order[..., 2:3]),
-    )
-    return mul(q0, mul(q1, q2))
+    if _TorchTensor is not None and isinstance(euler, _TorchTensor):
+        return _quat_torch.from_euler(euler, order)
+    else:
+        return _quat_np.from_euler(euler, order)
 
 
-def from_matrix(rotmats: np.array) -> np.array:
+def from_matrix(rotmats):
     """
     Convert rotation matrices to quaternions.
 
     Parameters
     ----------
-        rotmats: np.array[..., 3, 3]. Matrix order: [[r0.x, r0.y, r0.z],
-                                                     [r1.x, r1.y, r1.z],
-                                                     [r2.x, r2.y, r2.z]] where ri is row i.
+    rotmats: torch.Tensor or np.array[..., 3, 3]
+        Matrix order: [[r0.x, r0.y, r0.z],
+                       [r1.x, r1.y, r1.z],
+                       [r2.x, r2.y, r2.z]] where ri is row i.
 
     Returns
     -------
-        quat np.array[..., [w,x,y,z]]
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    # Separate components
-    r0c0 = rotmats[..., 0, 0]
-    r0c1 = rotmats[..., 0, 1]
-    r0c2 = rotmats[..., 0, 2]
-    r1c0 = rotmats[..., 1, 0]
-    r1c1 = rotmats[..., 1, 1]
-    r1c2 = rotmats[..., 1, 2]
-    r2c0 = rotmats[..., 2, 0]
-    r2c1 = rotmats[..., 2, 1]
-    r2c2 = rotmats[..., 2, 2]
-
-    return normalize(
-        np.where(
-            (r2c2 < 0.0)[..., np.newaxis],
-            np.where(
-                (r0c0 > r1c1)[..., np.newaxis],
-                np.concatenate(
-                    [
-                        (r2c1 - r1c2)[..., np.newaxis],
-                        (1.0 + r0c0 - r1c1 - r2c2)[..., np.newaxis],
-                        (r1c0 + r0c1)[..., np.newaxis],
-                        (r0c2 + r2c0)[..., np.newaxis],
-                    ],
-                    axis=-1,
-                ),
-                np.concatenate(
-                    [
-                        (r0c2 - r2c0)[..., np.newaxis],
-                        (r1c0 + r0c1)[..., np.newaxis],
-                        (1.0 - r0c0 + r1c1 - r2c2)[..., np.newaxis],
-                        (r2c1 + r1c2)[..., np.newaxis],
-                    ],
-                    axis=-1,
-                ),
-            ),
-            np.where(
-                (r0c0 < -r1c1)[..., np.newaxis],
-                np.concatenate(
-                    [
-                        (r1c0 - r0c1)[..., np.newaxis],
-                        (r0c2 + r2c0)[..., np.newaxis],
-                        (r2c1 + r1c2)[..., np.newaxis],
-                        (1.0 - r0c0 - r1c1 + r2c2)[..., np.newaxis],
-                    ],
-                    axis=-1,
-                ),
-                np.concatenate(
-                    [
-                        (1.0 + r0c0 + r1c1 + r2c2)[..., np.newaxis],
-                        (r2c1 - r1c2)[..., np.newaxis],
-                        (r0c2 - r2c0)[..., np.newaxis],
-                        (r1c0 - r0c1)[..., np.newaxis],
-                    ],
-                    axis=-1,
-                ),
-            ),
-        )
-    )
+    if _TorchTensor is not None and isinstance(rotmats, _TorchTensor):
+        return _quat_torch.from_matrix(rotmats)
+    else:
+        return _quat_np.from_matrix(rotmats)
 
 
-def to_euler(quaternions: np.array, order: np.array) -> np.array:
+def to_euler(quaternions, order):
     """
     Convert a quaternion to an intrinsic euler representation with a specified order.
     Does not detect/solve gimbal lock.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
     order : np.array[..., ['x'|'y'|'z', 'x'|'y'|'z', 'x'|'y'|'z']]
         order of the euler angles
         symmetric orders not supported (e.g., XYX).
 
     Returns
     -------
-    euler : np.array[..., 3]
+    euler : torch.Tensor or np.array[..., 3]
         euler angles in radians
     """
-
-    assert (
-        quaternions.shape[:-1] == order.shape[:-1]
-    ), "quaternions and order must have the same shape except for the last dimension"
-
-    aux = {
-        "x": 0,
-        "y": 1,
-        "z": 2,
-    }
-
-    angle_first = 2
-    angle_third = 0
-
-    i = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 2:3])[..., np.newaxis]
-    j = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 1:2])[..., np.newaxis]
-    k = np.apply_along_axis(lambda x: aux[x.item()], -1, order[..., 0:1])[..., np.newaxis]
-
-    # check if permutation is even or odd
-    sign = (i - j) * (j - k) * (k - i) // 2
-
-    # euler angles
-    euler = np.empty(quaternions.shape[:-1] + (3,))
-
-    # permutate quaternion elements
-    a = quaternions[..., 0:1] - np.take_along_axis(quaternions, j + 1, axis=-1)
-    b = (
-        np.take_along_axis(quaternions, i + 1, axis=-1)
-        + np.take_along_axis(quaternions, k + 1, axis=-1) * sign
-    )
-    c = np.take_along_axis(quaternions, j + 1, axis=-1) + quaternions[..., 0:1]
-    d = np.take_along_axis(quaternions, k + 1, axis=-1) * sign - np.take_along_axis(
-        quaternions, i + 1, axis=-1
-    )
-
-    # compute second angle
-    euler[..., 1:2] = (2 * np.arctan2(np.hypot(c, d), np.hypot(a, b))) - (np.pi / 2)
-
-    # compute first and third angle
-    half_sum = np.arctan2(b, a)
-    half_diff = np.arctan2(d, c)
-    euler[..., angle_first : angle_first + 1] = half_sum - half_diff
-    euler[..., angle_third : angle_third + 1] = (half_sum + half_diff) * sign
-
-    # for i in range(3):
-    # if euler[..., i] < -np.pi:
-    #    euler[..., i] += 2 * np.pi
-    # elif euler[..., i] > np.pi:
-    #    euler[..., i] -= 2 * np.pi
-    euler = np.mod(euler, 2 * np.pi)
-
-    return euler
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.to_euler(quaternions, order)
+    else:
+        return _quat_np.to_euler(quaternions, order)
 
 
-def to_scaled_angle_axis(quaternions: np.array) -> np.array:
+def to_scaled_angle_axis(quaternions):
     """
     Quaternion to scaled axis angle representation.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    scaledaxis : np.array[..., [x,y,z]]
+    scaledaxis : torch.Tensor or np.array[..., [x,y,z]]
         axis [x,y,z] of rotation where magnitude is the angle of rotation
     """
-    angle, axis = to_angle_axis(quaternions)
-    return angle * axis
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.to_scaled_angle_axis(quaternions)
+    else:
+        return _quat_np.to_scaled_angle_axis(quaternions)
 
 
-def to_angle_axis(quaternions: np.array) -> np.array:
+def to_angle_axis(quaternions):
     """
-    Quaternion to scaled axis angle representation.
+    Quaternion to axis angle representation.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    angle: np.array[..., angle]
-    axis : np.array[..., [x,y,z]]
+    angle: torch.Tensor or np.array[..., angle]
+    axis : torch.Tensor or np.array[..., [x,y,z]]
         normalized axis [x,y,z] of rotation
     """
-    w = quaternions[..., 0]
-    xyz = quaternions[..., 1:]
-
-    angle = 2 * np.arccos(np.clip(w, -1.0, 1.0))
-    s = np.sqrt(np.clip(1.0 - w * w, 0.0, 1.0))
-
-    # Avoid division by zero when s is close to zero (identity quaternion)
-    axis = np.zeros_like(xyz)
-    mask = s > 1e-8
-    if mask.any():
-        axis[mask] = xyz[mask] / np.expand_dims(s[mask], axis=-1)
-
-    return angle[..., np.newaxis], axis
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.to_angle_axis(quaternions)
+    else:
+        return _quat_np.to_angle_axis(quaternions)
 
 
-def to_matrix(quaternions: np.array) -> np.array:
+def to_matrix(quaternions):
     """
     Convert rotations given as quaternions to rotation matrices.
-    Parameters
-    ----------
-        quaternions: np.array[..., [w,x,y,z]]
-    Returns
-    -------
-        rotmats: np.array[..., 3, 3]. Matrix order: [[r0.x, r0.y, r0.z],
-                                                     [r1.x, r1.y, r1.z],
-                                                     [r2.x, r2.y, r2.z]] where ri is row i.
-    """
-    qw = quaternions[..., 0]
-    qx = quaternions[..., 1]
-    qy = quaternions[..., 2]
-    qz = quaternions[..., 3]
-
-    x2 = qx + qx
-    y2 = qy + qy
-    z2 = qz + qz
-    xx = qx * x2
-    yy = qy * y2
-    wx = qw * x2
-    xy = qx * y2
-    yz = qy * z2
-    wy = qw * y2
-    xz = qx * z2
-    zz = qz * z2
-    wz = qw * z2
-
-    m = np.empty(quaternions.shape[:-1] + (3, 3))
-    m[..., 0, 0] = 1.0 - (yy + zz)
-    m[..., 0, 1] = xy - wz
-    m[..., 0, 2] = xz + wy
-    m[..., 1, 0] = xy + wz
-    m[..., 1, 1] = 1.0 - (xx + zz)
-    m[..., 1, 2] = yz - wx
-    m[..., 2, 0] = xz - wy
-    m[..., 2, 1] = yz + wx
-    m[..., 2, 2] = 1.0 - (xx + yy)
-
-    return m
-
-
-def mul_vec(q: np.array, v: np.array) -> np.array:
-    """
-    Multiply a vector by a quaternion
 
     Parameters
     ----------
-    q : np.array[..., [w,x,y,z]]
-    v : np.array[..., [x,y,z]]
+    quaternions: torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    v: np.array[..., [x,y,z]]
+    rotmats: torch.Tensor or np.array[..., 3, 3]
+        Matrix order: [[r0.x, r0.y, r0.z],
+                       [r1.x, r1.y, r1.z],
+                       [r2.x, r2.y, r2.z]] where ri is row i.
     """
-    t = 2.0 * _fast_cross(q[..., 1:], v)
-    return v + q[..., 0][..., np.newaxis] * t + _fast_cross(q[..., 1:], t)
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.to_matrix(quaternions)
+    else:
+        return _quat_np.to_matrix(quaternions)
 
 
-def mul(q0: np.array, q1: np.array) -> np.array:
+def mul_vec(q, v):
+    """
+    Multiply a vector by a quaternion.
+
+    Parameters
+    ----------
+    q : torch.Tensor or np.array[..., [w,x,y,z]]
+    v : torch.Tensor or np.array[..., [x,y,z]]
+
+    Returns
+    -------
+    v: torch.Tensor or np.array[..., [x,y,z]]
+    """
+    if _TorchTensor is not None and isinstance(q, _TorchTensor):
+        return _quat_torch.mul_vec(q, v)
+    else:
+        return _quat_np.mul_vec(q, v)
+
+
+def mul(q0, q1):
     """
     Multiply two quaternions.
 
     Parameters
     ----------
-    q0 : np.array[..., [w,x,y,z]]
-    q1 : np.array[..., [w,x,y,z]]
+    q0 : torch.Tensor or np.array[..., [w,x,y,z]]
+    q1 : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    quat : np.array[..., [w,x,y,z]]
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    w0, x0, y0, z0 = q0[..., 0:1], q0[..., 1:2], q0[..., 2:3], q0[..., 3:4]
-    w1, x1, y1, z1 = q1[..., 0:1], q1[..., 1:2], q1[..., 2:3], q1[..., 3:4]
-    # (w0,v0)(w1,v1) = (w0w1 - v0·v1, w0v1 + w1v0 + v0 x v1)
-    return np.concatenate(
-        (
-            w0 * w1 - x0 * x1 - y0 * y1 - z0 * z1,  # w
-            w0 * x1 + w1 * x0 + y0 * z1 - z0 * y1,  # x
-            w0 * y1 + w1 * y0 + z0 * x1 - x0 * z1,  # y
-            w0 * z1 + w1 * z0 + x0 * y1 - y0 * x1,  # z
-        ),
-        axis=-1,
-    )
+    if _TorchTensor is not None and isinstance(q0, _TorchTensor):
+        return _quat_torch.mul(q0, q1)
+    else:
+        return _quat_np.mul(q0, q1)
 
 
-def length(quaternions: np.array) -> np.array:
+def length(quaternions):
     """
     Get the length or magnitude of the quaternions.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    length : np.array[...]
+    length : torch.Tensor or np.array[...]
     """
-    return np.linalg.norm(quaternions, axis=-1)
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.length(quaternions)
+    else:
+        return _quat_np.length(quaternions)
 
 
-def inverse(quaternions: np.array) -> np.array:
+def inverse(quaternions):
     """
     Inverse of a quaternion.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    # for a unit quaternion the conjugate is the inverse
-    # q^-1 = [q0, -q1, -q2, -q3]
-    return conjugate(quaternions)
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.inverse(quaternions)
+    else:
+        return _quat_np.inverse(quaternions)
 
 
-def conjugate(quaternions: np.array) -> np.array:
+def conjugate(quaternions):
     """
     Compute the conjugate of a quaternion.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    return np.concatenate((quaternions[..., 0:1], -quaternions[..., 1:]), axis=-1)
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.conjugate(quaternions)
+    else:
+        return _quat_np.conjugate(quaternions)
 
 
-def normalize(quaternions: np.array, eps: float = 1e-8) -> np.array:
+def normalize(quaternions, eps=1e-8):
     """
-    Convert all quaternions to unit quatenrions.
+    Convert all quaternions to unit quaternions.
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
+    eps : float, optional
+        Small value to avoid division by zero. Default is 1e-8.
 
     Returns
     -------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    return quaternions / (length(quaternions)[..., np.newaxis] + eps)
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.normalize(quaternions, eps)
+    else:
+        return _quat_np.normalize(quaternions, eps)
 
 
-def unroll(quaternions: np.array, axis: int) -> np.array:
+def unroll(quaternions, dim):
     """
     Avoid the quaternion 'double cover' problem by picking the cover
     of the first quaternion, and then removing sudden switches
@@ -440,145 +330,130 @@ def unroll(quaternions: np.array, axis: int) -> np.array:
 
     Parameters
     ----------
-    quaternions : np.array[..., [w,x,y,z]]
-    axis : int
-        unroll axis (e.g., frames axis)
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
+    dim : int
+        unroll dimension (e.g., frames dimension)
 
     Returns
     -------
-    quaternions : np.array[..., [w,x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    r = quaternions.swapaxes(0, axis)
-    # start with the second quaternion since
-    # we keep the cover of the first one
-    for i in range(1, r.shape[0]):
-        # distance (dot product) between the previous and current quaternion
-        d0 = np.sum(r[i] * r[i - 1], axis=-1)
-        # distance (dot product) between the previous and flipped current quaternion
-        d1 = np.sum(-r[i] * r[i - 1], axis=-1)
-        # if the distance with the flipped quaternion is smaller, use it
-        r[i][d0 < d1] = -r[i][d0 < d1]
-    r = r.swapaxes(0, axis)
-    return r
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.unroll(quaternions, dim)
+    else:
+        return _quat_np.unroll(quaternions, dim)
 
 
-def slerp(q0: np.array, q1: np.array, t: float | np.array, shortest: bool = True) -> np.array:
+def slerp(q0, q1, t, shortest=True):
     """
     Perform spherical linear interpolation (SLERP) between two unit quaternions.
 
     Parameters
     ----------
-    q0 : np.array[..., [w,x,y,z]]
-    q1 : np.array[..., [w,x,y,z]]
-    t : float or np.array[..., [t]]
+    q0 : torch.Tensor or np.array[..., [w,x,y,z]]
+    q1 : torch.Tensor or np.array[..., [w,x,y,z]]
+    t : float or torch.Tensor or np.array[..., [t]]
         Interpolation parameter between 0 and 1. At t=0, returns q0 and at t=1, returns q1.
-    shorthest : bool
-        Ensure the shorthest path between quaternions.
+    shortest : bool, optional
+        Ensure the shortest path between quaternions. Default is True.
 
     Returns
     -------
-    quat : np.array[..., [w,x,y,z]]
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
     """
-    # Compute the cosine of the angle between the two vectors.
-    dot = np.sum(q0 * q1, axis=-1, keepdims=True)
-
-    # If the dot product is negative, the quaternions
-    # have opposite handed-ness and slerp won't take
-    # the shorter path. Fix by reversing one quaternion.
-    q1 = np.where(shortest and dot < 0, -q1, q1)
-    dot = np.where(shortest and dot < 0, -dot, dot)
-
-    # Clamp to prevent instability at near 180° angle
-    dot = np.clip(dot, -1, 1)
-
-    # Compute the quaternion of the angle between the quaternions
-    theta_0 = np.arccos(dot)  # theta_0 = angle between input vectors
-    theta = theta_0 * t  # theta = angle between q0 vector and result
-
-    q2 = q1 - q0 * dot
-    q2 /= np.linalg.norm(q2 + 0.000001, axis=-1, keepdims=True)  # {q0, q2} is now an orthonormal basis
-
-    return np.cos(theta) * q0 + np.sin(theta) * q2
+    if _TorchTensor is not None and isinstance(q0, _TorchTensor):
+        return _quat_torch.slerp(q0, q1, t, shortest)
+    else:
+        return _quat_np.slerp(q0, q1, t, shortest)
 
 
-def from_to(v1: np.ndarray, v2: np.ndarray, normalize_input: bool = True) -> np.ndarray:
+def weighted_slerp(quaternions, weights, shortest=True):
+    """
+    Perform weighted spherical linear interpolation (SLERP) across multiple quaternions.
+    Uses iterative weighted SLERP to properly blend quaternions based on their weights.
+
+    Parameters
+    ----------
+    quaternions : torch.Tensor or np.array[num_items, ..., [w,x,y,z]]
+        Quaternions to blend. First dimension is the items to blend.
+        For batch processing with different weights, call this function in a loop.
+    weights : torch.Tensor or np.array[num_items]
+        Weights for each quaternion. Must sum to approximately 1.0 for meaningful results.
+    shortest : bool, optional
+        Ensure the shortest path between quaternions. Default is True.
+
+    Returns
+    -------
+    quat : torch.Tensor or np.array[..., [w,x,y,z]]
+        Weighted blend of input quaternions
+
+    Notes
+    -----
+    This function performs iterative weighted SLERP:
+    1. Start with first quaternion
+    2. For each subsequent quaternion i:
+       - Compute t_i = weight_i / (accumulated_weight + weight_i)
+       - SLERP between accumulated result and quaternion i with parameter t_i
+       - Update accumulated_weight += weight_i
+
+    This approach ensures proper geodesic blending on the quaternion manifold.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import pymotion.rotations.quat as quat
+    >>>
+    >>> # Define 3 quaternions (identity, 90° around Z, 180° around Z)
+    >>> quaternions = np.array([
+    ...     [1.0, 0.0, 0.0, 0.0],  # identity
+    ...     [0.707, 0.0, 0.0, 0.707],  # 90° Z
+    ...     [0.0, 0.0, 0.0, 1.0],  # 180° Z
+    ... ])
+    >>>
+    >>> # Single weight vector
+    >>> weights = np.array([0.33, 0.33, 0.34])
+    >>> result = quat.weighted_slerp(quaternions, weights)
+    >>>
+    >>> # Batch processing with different weights - call in a loop
+    >>> weights_batch = np.array([
+    ...     [1.0, 0.0, 0.0],  # Only first quaternion
+    ...     [0.0, 1.0, 0.0],  # Only second quaternion
+    ...     [0.5, 0.5, 0.0],  # Blend first two
+    ... ])
+    >>> results = np.stack([
+    ...     quat.weighted_slerp(quaternions, w) for w in weights_batch
+    ... ])
+    """
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.weighted_slerp(quaternions, weights, shortest)
+    else:
+        return _quat_np.weighted_slerp(quaternions, weights, shortest)
+
+
+def from_to(v1, v2, normalize_input=True):
     """
     Calculate the quaternion that rotates direction v1 to direction v2.
     When v1 and v2 are parallel, the result is the identity quaternion.
 
     Parameters
     ----------
-    v1, v2 : np.array[..., [x,y,z]]
+    v1, v2 : torch.Tensor or np.array[..., [x,y,z]]
         Input vectors representing directions.
-    normalize_input : bool
-        Whether to normalize the input vectors.
+    normalize_input : bool, optional
+        Whether to normalize the input vectors. Default is True.
 
     Returns
     -------
-    rot : np.array[..., [w,x,y,z]]
+    rot : torch.Tensor or np.array[..., [w,x,y,z]]
         Quaternion representing the rotation.
     """
-    assert v1.shape[-1] == 3 and v2.shape[-1] == 3, "Input vectors must have shape [..., 3]"
-    assert v1.shape == v2.shape, "Input vectors must have the same shape"
-
-    if normalize_input:
-        v1_norm = vec.normalize(v1)
-        v2_norm = vec.normalize(v2)
+    if _TorchTensor is not None and isinstance(v1, _TorchTensor):
+        return _quat_torch.from_to(v1, v2, normalize_input)
     else:
-        v1_norm = v1
-        v2_norm = v2
-
-    if v1.ndim == 1:
-        v1_norm = v1_norm[np.newaxis, :]
-        v2_norm = v2_norm[np.newaxis, :]
-
-    # Calculate cross product and dot product
-    cross = np.cross(v1_norm, v2_norm)
-    dot = np.sum(v1_norm * v2_norm, axis=-1, keepdims=True)
-
-    # Handle general case
-    axis_rot = normalize(cross)
-    w = np.sqrt((1 + dot) * 0.5)  # cos(theta/2) = sqrt((1 + dot) / 2)
-    s = np.sqrt((1 - dot) * 0.5)  # sin(theta/2) = sqrt((1 - dot) / 2)
-    rot = np.concatenate([w, axis_rot * s], axis=-1)
-
-    # Handle parallel vectors (dot ≈ 1)
-    parallel = np.isclose(dot, 1.0)
-    rot[parallel[..., 0]] = [1.0, 0.0, 0.0, 0.0]
-
-    # Handle anti-parallel vectors (dot ≈ -1)
-    anti_parallel_mask = np.isclose(dot, -1.0)[..., 0]
-
-    if np.any(anti_parallel_mask):  # Check if any anti-parallel vectors exist
-        v1_anti_parallel = v1_norm[anti_parallel_mask]  # Extract anti-parallel v1 vectors
-
-        # Vectorized orthogonal vector selection
-        orthogonal_anti_parallel = np.empty_like(v1_anti_parallel)  # Initialize with correct shape
-        condition_mask = np.isclose(np.abs(v1_anti_parallel[..., 0]), 1.0)  # Boolean mask
-
-        orthogonal_anti_parallel[condition_mask] = np.array([0.0, 1.0, 0.0])  # Assign for True condition
-        orthogonal_anti_parallel[~condition_mask] = np.array([1.0, 0.0, 0.0])  # Assign for False condition
-
-        # Vectorized axis of rotation calculation
-        axis_rot_anti_parallel = normalize(np.cross(v1_anti_parallel, orthogonal_anti_parallel))
-
-        # Vectorized quaternion construction for anti-parallel case
-        rot_correction_anti_parallel = np.concatenate(
-            [np.zeros_like(axis_rot_anti_parallel[..., :1]), axis_rot_anti_parallel], axis=-1
-        )
-
-        # Vectorized assignment of corrections
-        rot[anti_parallel_mask] = rot_correction_anti_parallel
-
-    if v1.ndim == 1:
-        rot = rot[0]
-
-    return rot
+        return _quat_np.from_to(v1, v2, normalize_input)
 
 
-def from_to_axis(
-    v1: np.ndarray, v2: np.ndarray, rot_axis: np.ndarray, normalize_input: bool = True
-) -> np.ndarray:
+def from_to_axis(v1, v2, rot_axis, normalize_input=True):
     """
     Calculate the quaternion that rotates direction v1 to direction v2.
     The rotation axis is fixed to the provided axis.
@@ -586,89 +461,136 @@ def from_to_axis(
 
     Parameters
     ----------
-    v1, v2 : np.array[..., [x,y,z]]
+    v1, v2 : torch.Tensor or np.array[..., [x,y,z]]
         Input vectors representing directions.
-    axis : np.array[..., [x,y,z]]
+    rot_axis : torch.Tensor or np.array[..., [x,y,z]]
         Fixed rotation axis.
-    normalize_input : bool
-        Whether to normalize the input vectors.
+    normalize_input : bool, optional
+        Whether to normalize the input vectors. Default is True.
 
     Returns
     -------
-    rot : np.array[..., [w,x,y,z]]
+    rot : torch.Tensor or np.array[..., [w,x,y,z]]
         Quaternion representing the rotation.
     """
-    assert v1.shape[-1] == 3 and v2.shape[-1] == 3, "Input vectors must have shape [..., 3]"
-    assert v1.shape == v2.shape, "Input vectors must have the same shape"
-    assert v1.shape == rot_axis.shape, "Input vectors and rotation axis must have the same shape"
-
-    if rot_axis.ndim == 1:
-        rot_axis = rot_axis[np.newaxis, :]
-
-    if normalize_input:
-        v1_norm = vec.normalize(v1)
-        v2_norm = vec.normalize(v2)
+    if _TorchTensor is not None and isinstance(v1, _TorchTensor):
+        return _quat_torch.from_to_axis(v1, v2, rot_axis, normalize_input)
     else:
-        v1_norm = v1
-        v2_norm = v2
-
-    if v1.ndim == 1:
-        v1_norm = v1_norm[np.newaxis, :]
-        v2_norm = v2_norm[np.newaxis, :]
-
-    # Calculate cross product and dot product
-    cross = np.cross(v1_norm, v2_norm)
-    dot = np.sum(v1_norm * v2_norm, axis=-1, keepdims=True)
-
-    # Handle general case
-    w = np.sqrt((1 + dot) * 0.5)  # cos(theta/2) = sqrt((1 + dot) / 2)
-    s = np.sqrt((1 - dot) * 0.5)  # sin(theta/2) = sqrt((1 - dot) / 2)
-    # Adjust sign of s based on cross product and rot_axis
-    cross_dot_axis = np.sum(cross * rot_axis, axis=-1, keepdims=True)
-    s *= np.sign(cross_dot_axis)  # Correct sign based on alignment
-    # Combine w and s to form quaternion
-    rot = np.concatenate([w, rot_axis * s], axis=-1)
-
-    # Handle parallel vectors (dot ≈ 1)
-    parallel = np.isclose(dot, 1.0)
-    rot[parallel[..., 0]] = [1.0, 0.0, 0.0, 0.0]
-
-    # Handle anti-parallel vectors (dot ≈ -1)
-    anti_parallel = np.isclose(dot, -1.0)
-    anti_parallel_rotmask = np.tile(anti_parallel, (1,) * (rot.ndim - 1) + (4,))
-    anti_parallel_rotaxismask = np.tile(anti_parallel, (1,) * (rot_axis.ndim - 1) + (3,))
-    rots_anti_parallel = rot[anti_parallel_rotmask]
-    rots_anti_parallel[::4] = 0
-    rots_anti_parallel[[False, True, True, True] * (len(rots_anti_parallel) // 4)] = rot_axis[
-        anti_parallel_rotaxismask
-    ]
-    rot[anti_parallel_rotmask] = rots_anti_parallel
-
-    if v1.ndim == 1:
-        rot = rot[0]
-
-    return rot
+        return _quat_np.from_to_axis(v1, v2, rot_axis, normalize_input)
 
 
-def _fast_cross(a: np.array, b: np.array) -> np.array:
+def canonicalize(quaternions):
     """
-    Fast cross of two vectors
+    Convert quaternions to canonical form where w >= 0.
+
+    This resolves the quaternion double-cover problem by ensuring all quaternions
+    use the same hemisphere. This is important before operations like scaling
+    the rotation angle, as it ensures the shortest rotation path is used.
+
+    The PyTorch implementation is fully differentiable.
 
     Parameters
     ----------
-    a : np.array[..., [x,y,z]]
-    b : np.array[..., [x,y,z]]
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
 
     Returns
     -------
-    np.array[..., [x,y,z]]
-    """
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
+        Quaternions with w >= 0 (same rotation, canonical representation)
 
-    return np.concatenate(
-        [
-            a[..., 1:2] * b[..., 2:3] - a[..., 2:3] * b[..., 1:2],
-            a[..., 2:3] * b[..., 0:1] - a[..., 0:1] * b[..., 2:3],
-            a[..., 0:1] * b[..., 1:2] - a[..., 1:2] * b[..., 0:1],
-        ],
-        axis=-1,
-    )
+    Notes
+    -----
+    A quaternion q and -q represent the same rotation. However, when converting
+    to angle-axis representation, a quaternion with w < 0 will produce an angle
+    > 180°, which represents the "long way around". By ensuring w >= 0, we
+    guarantee the angle will be <= 180° (the shortest rotation path).
+
+    Examples
+    --------
+    >>> q = np.array([[-0.707, 0.0, 0.707, 0.0]])  # w < 0
+    >>> q_canonical = canonicalize(q)
+    >>> print(q_canonical)  # [0.707, 0.0, -0.707, 0.0], same rotation but w >= 0
+    """
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.canonicalize(quaternions)
+    else:
+        return _quat_np.canonicalize(quaternions)
+
+
+def scale(quaternions, factor):
+    """
+    Scale quaternion rotations by a factor.
+
+    This function scales the rotation angle of quaternions while preserving
+    the rotation axis. A factor of 0.5 gives half the rotation, 2.0 doubles it, etc.
+
+    The function automatically handles the quaternion double-cover problem by
+    canonicalizing quaternions before scaling, ensuring the shortest rotation
+    path is always used.
+
+    The PyTorch implementation is fully differentiable.
+
+    Parameters
+    ----------
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
+        Input quaternions to scale.
+    factor : float, torch.Tensor, or np.array
+        Scale factor for the rotation angle. Can be:
+        - A scalar (applies same scale to all quaternions)
+        - A tensor/array broadcastable to quaternions shape (for per-element scaling)
+
+    Returns
+    -------
+    quaternions : torch.Tensor or np.array[..., [w,x,y,z]]
+        Scaled quaternions.
+
+    Notes
+    -----
+    The scaling is performed in angle-axis space:
+    1. Canonicalize quaternions (ensure w >= 0 for shortest path)
+    2. Convert to scaled angle-axis representation
+    3. Multiply the angle by the scale factor
+    4. Convert back to quaternion
+
+    Examples
+    --------
+    >>> q = np.array([[0.707, 0.0, 0.707, 0.0]])  # 90° rotation around Y
+    >>> q_half = scale(q, 0.5)  # 45° rotation around Y
+    >>> q_double = scale(q, 2.0)  # 180° rotation around Y
+
+    >>> # Per-joint scaling
+    >>> q = np.random.randn(10, 22, 4)  # 10 frames, 22 joints
+    >>> q = normalize(q)
+    >>> joint_scales = np.random.rand(22, 1)  # Different scale per joint
+    >>> q_scaled = scale(q, joint_scales)
+    """
+    if _TorchTensor is not None and isinstance(quaternions, _TorchTensor):
+        return _quat_torch.scale(quaternions, factor)
+    else:
+        return _quat_np.scale(quaternions, factor)
+
+
+# Expose public API
+__all__ = [
+    "from_scaled_angle_axis",
+    "from_angle_axis",
+    "from_euler",
+    "from_matrix",
+    "to_euler",
+    "to_scaled_angle_axis",
+    "to_angle_axis",
+    "to_matrix",
+    "mul_vec",
+    "mul",
+    "length",
+    "inverse",
+    "conjugate",
+    "normalize",
+    "unroll",
+    "slerp",
+    "weighted_slerp",
+    "from_to",
+    "from_to_axis",
+    "canonicalize",
+    "scale",
+]
