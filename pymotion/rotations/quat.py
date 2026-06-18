@@ -570,6 +570,44 @@ def scale(quaternions, factor):
         return _quat_np.scale(quaternions, factor)
 
 
+
+def delta(rotations, target_rotations):
+    """
+    Compute the shortest-path delta rotation from rotations to target_rotations.
+
+    For each pair (q, q_target), computes q_delta = q^{-1} * q_target such that
+    q * q_delta = q_target.  Before multiplying, the target quaternion is flipped
+    to the same hemisphere as the source quaternion (via the dot-product sign),
+    which guarantees the delta always represents the shortest angular path.
+
+    The PyTorch implementation is fully differentiable.
+
+    Parameters
+    ----------
+    rotations : torch.Tensor or np.array[..., [w,x,y,z]]
+        Source quaternions.
+    target_rotations : torch.Tensor or np.array[..., [w,x,y,z]]
+        Target quaternions.
+
+    Returns
+    -------
+    torch.Tensor or np.array[..., [w,x,y,z]]
+        Delta quaternions such that ``mul(rotations, delta) ≈ target_rotations``
+        via the shortest path.
+
+    Examples
+    --------
+    >>> q0 = np.array([[1.0, 0.0, 0.0, 0.0]])           # identity
+    >>> q1 = np.array([[0.707, 0.0, 0.707, 0.0]])        # 90° around Y
+    >>> d  = delta(q0, q1)
+    >>> # mul(q0, d) ≈ q1
+    """
+    if _TorchTensor is not None and isinstance(rotations, _TorchTensor):
+        return _quat_torch.delta(rotations, target_rotations)
+    else:
+        return _quat_np.delta(rotations, target_rotations)
+
+
 # Expose public API
 __all__ = [
     "from_scaled_angle_axis",
@@ -593,4 +631,5 @@ __all__ = [
     "from_to_axis",
     "canonicalize",
     "scale",
+    "delta",
 ]

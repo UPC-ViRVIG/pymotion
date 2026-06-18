@@ -867,6 +867,44 @@ def scale(quaternions: np.array, factor: float | np.array) -> np.array:
     return from_scaled_angle_axis(scaled_axis)
 
 
+def delta(
+    rotations: np.array, target_rotations: np.array
+) -> np.array:
+    """
+    Compute the shortest-path delta rotation from rotations to target_rotations.
+
+    For each pair (q, q_target), computes q_delta = q^{-1} * q_target such that
+    q * q_delta = q_target.  Before multiplying, the target quaternion is flipped
+    to the same hemisphere as the source quaternion (via the dot-product sign),
+    which guarantees the delta always represents the shortest angular path.
+
+    Parameters
+    ----------
+    rotations : np.array[..., [w,x,y,z]]
+        Source quaternions.
+    target_rotations : np.array[..., [w,x,y,z]]
+        Target quaternions.
+
+    Returns
+    -------
+    np.array[..., [w,x,y,z]]
+        Delta quaternions such that ``mul(rotations, delta) ≈ target_rotations``
+        via the shortest path.
+
+    Examples
+    --------
+    >>> q0 = np.array([[1.0, 0.0, 0.0, 0.0]])           # identity
+    >>> q1 = np.array([[0.707, 0.0, 0.707, 0.0]])        # 90° around Y
+    >>> d  = delta(q0, q1)
+    >>> # mul(q0, d) ≈ q1
+    """
+    dot_products = np.sum(rotations * target_rotations, axis=-1, keepdims=True)
+    target_rotations_closest = np.where(
+        dot_products < 0, -target_rotations, target_rotations
+    )
+    return mul(inverse(rotations), target_rotations_closest)
+
+
 def _fast_cross(a: np.array, b: np.array) -> np.array:
     """
     Fast cross of two vectors

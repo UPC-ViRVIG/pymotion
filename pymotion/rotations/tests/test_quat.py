@@ -818,3 +818,55 @@ class TestQuat:
             atol=self.atol,
             err_msg="multidimensional quat from_to_axis: 180 degree case PyTorch failed",
         )
+
+    def test_delta(self):
+        # --- identity: delta from q to itself should be identity ---
+        q = np.array(
+            [
+                [1.0, 0.0, 0.0, 0.0],             # identity
+                [0.70710678, 0.70710678, 0.0, 0.0],  # 90° around X
+                [0.92387953, 0.0, 0.38268343, 0.0],  # 45° around Y
+            ]
+        )
+        q_id = np.tile([1.0, 0.0, 0.0, 0.0], (3, 1))
+        d = quat.delta(q, q)
+        d_t = quat_torch.delta(torch.from_numpy(q), torch.from_numpy(q))
+        assert_allclose(d, q_id, atol=self.atol)
+        assert_allclose(d_t.numpy(), q_id, atol=self.atol)
+
+        # --- roundtrip: mul(q, delta(q, q_target)) == q_target ---
+        q0 = np.array([[1.0, 0.0, 0.0, 0.0], [0.70710678, 0.0, 0.70710678, 0.0]])
+        q1 = np.array([[0.70710678, 0.70710678, 0.0, 0.0], [0.92387953, 0.0, 0.0, 0.38268343]])
+        d = quat.delta(q0, q1)
+        d_t = quat_torch.delta(torch.from_numpy(q0), torch.from_numpy(q1))
+        result = quat.mul(q0, d)
+        result_t = quat_torch.mul(torch.from_numpy(q0), d_t)
+        assert_allclose(result, q1, atol=self.atol)
+        assert_allclose(result_t.numpy(), q1, atol=self.atol)
+
+        # --- hemisphere flip: delta to -q_target should still give shortest path ---
+        # q and -q represent the same rotation; delta should be equivalent in both cases
+        q_source = np.array([[0.92387953, 0.0, 0.38268343, 0.0]])  # 45° around Y
+        q_target = np.array([[0.70710678, 0.0, 0.70710678, 0.0]])  # 90° around Y
+        d_pos = quat.delta(q_source, q_target)
+        d_neg = quat.delta(q_source, -q_target)
+        # Both deltas represent the same rotation (only sign may differ)
+        assert_allclose(np.abs(d_pos), np.abs(d_neg), atol=self.atol)
+        # And both lead to the same pose when applied
+        result_pos = quat.mul(q_source, d_pos)
+        result_neg = quat.mul(q_source, d_neg)
+        # Compare as rotation matrices (eliminates double-cover ambiguity)
+        assert_allclose(quat.to_matrix(result_pos), quat.to_matrix(result_neg), atol=self.atol)
+
+        # --- NumPy/PyTorch parity on random inputs ---
+        np.random.seed(42)
+        n = 100
+        axis = np.random.rand(n, 3).astype(np.float64)
+        axis /= np.linalg.norm(axis, axis=-1, keepdims=True)
+        angles_src = (np.random.rand(n, 1) * 2 * np.pi)
+        angles_tgt = (np.random.rand(n, 1) * 2 * np.pi)
+        q_src = quat.from_angle_axis(angles_src, axis)
+        q_tgt = quat.from_angle_axis(angles_tgt, axis)
+        d_np = quat.delta(q_src, q_tgt)
+        d_torch = quat_torch.delta(torch.from_numpy(q_src), torch.from_numpy(q_tgt))
+        assert_allclose(d_np, d_torch.numpy(), atol=self.atol)

@@ -872,6 +872,46 @@ def scale(quaternions: torch.Tensor, factor: float | torch.Tensor) -> torch.Tens
     return from_scaled_angle_axis(scaled_axis)
 
 
+def delta(
+    rotations: torch.Tensor, target_rotations: torch.Tensor
+) -> torch.Tensor:
+    """
+    Compute the shortest-path delta rotation from rotations to target_rotations.
+
+    For each pair (q, q_target), computes q_delta = q^{-1} * q_target such that
+    q * q_delta = q_target.  Before multiplying, the target quaternion is flipped
+    to the same hemisphere as the source quaternion (via the dot-product sign),
+    which guarantees the delta always represents the shortest angular path.
+
+    The PyTorch implementation is fully differentiable.
+
+    Parameters
+    ----------
+    rotations : torch.Tensor[..., [w,x,y,z]]
+        Source quaternions.
+    target_rotations : torch.Tensor[..., [w,x,y,z]]
+        Target quaternions.
+
+    Returns
+    -------
+    torch.Tensor[..., [w,x,y,z]]
+        Delta quaternions such that ``mul(rotations, delta) ≈ target_rotations``
+        via the shortest path.
+
+    Examples
+    --------
+    >>> q0 = torch.tensor([[1.0, 0.0, 0.0, 0.0]])       # identity
+    >>> q1 = torch.tensor([[0.707, 0.0, 0.707, 0.0]])    # 90° around Y
+    >>> d  = delta(q0, q1)
+    >>> # mul(q0, d) ≈ q1
+    """
+    dot_products = torch.sum(rotations * target_rotations, dim=-1, keepdim=True)
+    target_rotations_closest = torch.where(
+        dot_products < 0, -target_rotations, target_rotations
+    )
+    return mul(inverse(rotations), target_rotations_closest)
+
+
 def _fast_cross(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     """
     Fast cross of two vectors
