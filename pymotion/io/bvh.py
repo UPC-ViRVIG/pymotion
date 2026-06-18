@@ -5,6 +5,10 @@ import os
 
 import numpy as np
 import pymotion.rotations.quat_np as quat
+import pymotion.ops.vector as vec
+import pymotion.ops.skeleton as skeleton
+
+from pymotion.ops.time import savgol_filter
 
 
 class BVH:
@@ -437,6 +441,479 @@ class BVH:
 
         # Set data back (converts quaternions to euler angles using new order)
         self.set_data(rots, pos)
+
+    def merge(self, other):
+        """
+        Merge another BVH into this one by appending its frames.
+        Both BVHs must have the same skeleton (names, parents, rotation order).
+
+        Parameters
+        ----------
+        other : BVH
+            BVH object whose frames will be appended.
+        """
+        if np.any(self.data["names"] != other.data["names"]):
+            raise ValueError("Names must match")
+        if np.any(self.data["parents"] != other.data["parents"]):
+            raise ValueError("Parents must match")
+        if np.any(self.data["rot_order"] != other.data["rot_order"]):
+            raise ValueError("Rotation orders must match")
+
+        self.data["rotations"] = np.concatenate(
+            [self.data["rotations"], other.data["rotations"]], axis=0
+        )
+        self.data["positions"] = np.concatenate(
+            [self.data["positions"], other.data["positions"]], axis=0
+        )
+
+    def resample(self, target_frame_time: float = None, target_fps: float = None, source_fps: float = None):
+        """
+        Resample the animation to a different frame rate.
+        Exactly one of target_frame_time or target_fps must be provided.
+
+        Parameters
+        ----------
+        target_frame_time : float, optional
+            Target time between frames in seconds.
+        target_fps : float, optional
+            Target frames per second.
+        source_fps : float, optional
+            If provided, overrides the frame_time stored in the BVH data.
+        """
+        if (target_frame_time is None) == (target_fps is None):
+            raise ValueError("Exactly one of target_frame_time or target_fps must be provided.")
+        if target_fps is not None:
+            target_frame_time = 1.0 / target_fps
+
+        if source_fps is not None:
+            self.data["frame_time"] = 1.0 / source_fps
+
+        frame_time = self.data["frame_time"]
+        local_rotations, local_positions, _, _, _, _ = self.get_data()
+
+        current_fps = int(round(1.0 / frame_time))
+        target_fps_int = int(round(1.0 / target_frame_time))
+
+        if current_fps // 2 == target_fps_int:
+            # Exact 2x downsampling
+            local_rotations = local_rotations[::2, ...]
+            local_positions = local_positions[::2, ...]
+            self.set_data(local_rotations, local_positions)
+        elif current_fps == target_fps_int:
+            # Same FPS, just update frame_time
+            pass
+        else:
+            # General resampling via interpolation
+            num_frames = local_rotations.shape[0]
+            num_frames_target = int(round(num_frames * frame_time / target_frame_time))
+            samples = np.linspace(0, num_frames - 1, num_frames_target)
+
+            # Interpolate rotations (quaternions)
+            rot_shape = local_rotations.shape
+            reshaped_rots = local_rotations.reshape(rot_shape[0], -1)
+            interpolated_rots = np.zeros((len(samples), reshaped_rots.shape[1]))
+            for i in range(reshaped_rots.shape[1]):
+                interpolated_rots[:, i] = np.interp(
+                    x=samples,
+                    xp=np.arange(num_frames),
+                    fp=reshaped_rots[:, i],
+                    left=reshaped_rots[-1, i],
+                    right=reshaped_rots[0, i],
+                )
+            local_rotations = quat.normalize(
+                interpolated_rots.reshape(len(samples), *rot_shape[1:])
+            )
+
+            # Interpolate positions
+            pos_shape = local_positions.shape
+            reshaped_pos = local_positions.reshape(pos_shape[0], -1)
+            interpolated_pos = np.zeros((len(samples), reshaped_pos.shape[1]))
+            for i in range(reshaped_pos.shape[1]):
+                interpolated_pos[:, i] = np.interp(
+                    x=samples,
+                    xp=np.arange(num_frames),
+                    fp=reshaped_pos[:, i],
+                    left=reshaped_pos[-1, i],
+                    right=reshaped_pos[0, i],
+                )
+            local_positions = interpolated_pos.reshape(len(samples), *pos_shape[1:])
+
+            self.set_data(local_rotations, local_positions)
+
+        self.data["frame_time"] = target_frame_time
+
+    def keep_joints(self, joints: list):
+        """
+        Keep only the joints at the specified indices, removing the rest.
+
+        Parameters
+        ----------
+        joints : list[int]
+            List of joint indices to keep.
+        """
+        delete_joints = [
+            i for i in range(len(self.data["names"])) if i not in joints
+        ]
+        self.remove_joints(delete_joints)
+
+    def remove_joints_name(self, joint_names: list):
+        """
+        Remove joints specified by their names.
+
+        Parameters
+        ----------
+        joint_names : list[str]
+            List of joint names to remove.
+        """
+        joint_names_set = set(joint_names)
+        indices = [
+            i for i, name in enumerate(self.data["names"]) if name in joint_names_set
+        ]
+        self.remove_joints(indices)
+
+    def keep_joints_name(self, joint_names: list):
+        """
+        Keep only joints with the given names, removing the rest.
+
+        Parameters
+        ----------
+        joint_names : list[str]
+            List of joint names to keep.
+        """
+        joint_names_set = set(joint_names)
+        indices = [
+            i for i, name in enumerate(self.data["names"]) if name not in joint_names_set
+        ]
+        self.remove_joints(indices)
+
+    def remove_root_joint(self):
+        """
+        Remove the root joint (index 0) from the skeleton.
+        """
+        self.remove_joints([0])
+
+    def slice_frames(self, start: int = 0, end: int = None):
+        """
+        Slice the animation frames using Python-style start/end indexing.
+
+        Parameters
+        ----------
+        start : int, optional
+            Start frame index (inclusive). Default is 0.
+        end : int, optional
+            End frame index (exclusive). Default is None (end of animation).
+        """
+        self.data["positions"] = self.data["positions"][start:end]
+        self.data["rotations"] = self.data["rotations"][start:end]
+
+    def joint_intersection(self, other):
+        """
+        Keep only joints whose names exist in both this BVH and the other BVH.
+
+        Parameters
+        ----------
+        other : BVH
+            Reference BVH for intersection.
+        """
+        other_names = set(other.data["names"])
+        intersection = [name for name in self.data["names"] if name in other_names]
+        self.keep_joints_name(intersection)
+
+    def loop(self, num_loops: int):
+        """
+        Repeat the animation a given number of times.
+
+        Parameters
+        ----------
+        num_loops : int
+            Number of times to repeat the animation.
+        """
+        self.data["positions"] = np.concatenate(
+            [self.data["positions"]] * num_loops, axis=0
+        )
+        self.data["rotations"] = np.concatenate(
+            [self.data["rotations"]] * num_loops, axis=0
+        )
+
+    def shift(self, shift_frames: int):
+        """
+        Roll/shift the animation by moving the last N frames to the beginning.
+
+        Parameters
+        ----------
+        shift_frames : int
+            Number of frames to shift.
+        """
+        self.data["positions"] = np.concatenate(
+            [
+                self.data["positions"][-shift_frames:],
+                self.data["positions"][:-shift_frames],
+            ],
+            axis=0,
+        )
+        self.data["rotations"] = np.concatenate(
+            [
+                self.data["rotations"][-shift_frames:],
+                self.data["rotations"][:-shift_frames],
+            ],
+            axis=0,
+        )
+
+    def add_root_joint(self, local_forward_hips: np.ndarray):
+        """
+        Add a new root joint above the current root by extracting
+        a smoothed character-space trajectory from the current root joint.
+
+        Parameters
+        ----------
+        local_forward_hips : np.ndarray[3]
+            The local forward direction of the hips joint,
+            e.g., [0, 1, 0] or [0, 0, 1] depending on the capture system.
+        """
+        local_rotations, local_positions, _, _, _, _ = self.get_data()
+        fps = int(round(1.0 / self.data["frame_time"]))
+
+        global_rotations = local_rotations[:, 0, :]
+        global_positions = local_positions[:, 0, :]
+
+        # Smoothed character position (projection of pelvis to floor)
+        window_length = fps + (1 - fps % 2)  # ensure odd
+        character_positions = global_positions.copy()
+        character_positions[:, 1] = 0.0
+        character_positions = savgol_filter(
+            character_positions, window_length, 3, axis=0, mode="nearest"
+        )
+
+        # Smoothed forward direction
+        forward_hips = quat.mul_vec(global_rotations, local_forward_hips)
+        forward_hips[:, 1] = 0.0
+        forward_character = vec.normalize(forward_hips)
+        forward_character = savgol_filter(
+            forward_character, window_length, 3, axis=0, mode="nearest"
+        )
+        forward_character = vec.normalize(forward_character)
+
+        # Character rotation from forward direction
+        character_rotations = quat.from_to_axis(
+            np.tile(np.array([0.0, 0.0, 1.0]), (len(global_rotations), 1)),
+            forward_character,
+            rot_axis=np.tile(np.array([0.0, 1.0, 0.0]), (len(global_rotations), 1)),
+            normalize_input=False,
+        )
+
+        # Build new arrays with prepended root joint
+        r_local_rotations = np.concatenate(
+            [local_rotations[:, 0:1, :].copy(), local_rotations.copy()], axis=1
+        )
+        r_local_positions = np.concatenate(
+            [local_positions[:, 0:1, :].copy(), local_positions.copy()], axis=1
+        )
+
+        # Joint 1 becomes relative to new root
+        r_local_rotations[:, 1, :] = quat.mul(
+            quat.inverse(character_rotations), global_rotations
+        )
+        r_local_positions[:, 1, :] = quat.mul_vec(
+            quat.inverse(character_rotations),
+            global_positions - character_positions,
+        )
+
+        # New root gets character-space transform
+        r_local_rotations[:, 0, :] = character_rotations
+        r_local_positions[:, 0, :] = character_positions
+
+        # Update skeleton data
+        self.data["names"] = np.concatenate(
+            [np.array(["Root"]), self.data["names"]], axis=0
+        )
+        self.data["offsets"] = np.concatenate(
+            [
+                np.zeros((1, 3), dtype=np.float32),
+                r_local_positions[0, 1:2].copy(),
+                self.data["offsets"][1:],
+            ],
+            axis=0,
+        )
+        self.data["end_sites_parents"] = self.data["end_sites_parents"] + 1
+        self.data["parents"] = np.concatenate(
+            [
+                np.zeros((1,), dtype=np.int32),
+                np.zeros((1,), dtype=np.int32),
+                self.data["parents"][1:] + 1,
+            ],
+            axis=0,
+        )
+        self.data["rot_order"] = np.concatenate(
+            [self.data["rot_order"][0:1], self.data["rot_order"]], axis=0
+        )
+        self.data["channels"] = np.concatenate(
+            [np.array([6], dtype=np.int32), self.data["channels"]], axis=0
+        )
+        self.set_data(r_local_rotations, r_local_positions)
+
+    def rotate_root(self, angle_degrees: float, axis: str = "y"):
+        """
+        Apply a global rotation around the specified axis to the root joint.
+        Rotates both the root joint's rotation and translation.
+
+        Parameters
+        ----------
+        angle_degrees : float
+            Rotation angle in degrees.
+        axis : str, optional
+            Axis to rotate around: 'x', 'y', or 'z'. Default is 'y'.
+        """
+        local_rotations, local_positions, _, _, _, _ = self.get_data()
+
+        angle_rad = np.radians(angle_degrees)
+        half_angle = angle_rad / 2.0
+
+        axis = axis.lower()
+        if axis == "x":
+            q = np.array([np.cos(half_angle), np.sin(half_angle), 0.0, 0.0], dtype=np.float32)
+        elif axis == "y":
+            q = np.array([np.cos(half_angle), 0.0, np.sin(half_angle), 0.0], dtype=np.float32)
+        elif axis == "z":
+            q = np.array([np.cos(half_angle), 0.0, 0.0, np.sin(half_angle)], dtype=np.float32)
+        else:
+            raise ValueError(f"Invalid axis '{axis}'. Must be 'x', 'y', or 'z'.")
+
+        global_rotation = np.tile(q, (local_rotations.shape[0], 1))
+
+        local_rotations[:, 0, :] = quat.mul(global_rotation, local_rotations[:, 0, :])
+        local_positions[:, 0, :] = quat.mul_vec(global_rotation, local_positions[:, 0, :])
+
+        self.set_data(local_rotations, local_positions)
+
+    def _generate_mirror_mapping(self):
+        """
+        Generate a mirror mapping from joint names by detecting left/right
+        symmetry patterns such as 'Left'/'Right', '_L'/'_R', 'L_'/'R_'.
+
+        Returns
+        -------
+        mapping : np.ndarray[n_joints]
+            Array where mapping[i] is the index of the mirrored joint for joint i.
+            Center joints map to themselves.
+
+        Examples
+        --------
+        For a 25-joint skeleton with standard naming, this would produce
+        a mapping equivalent to:
+
+        >>> # [0,1,21,22,23,24,6,7,8,9,17,18,19,20,14,15,16,10,11,12,13,2,3,4,5]
+        >>> # Root->Root, Hips->Hips, LeftUpLeg<->RightUpLeg, etc.
+        """
+        names = list(self.data["names"])
+        n_joints = len(names)
+        mapping = np.arange(n_joints)
+
+        # Pairs of (left_pattern, right_pattern) to check in joint names
+        patterns = [
+            ("Left", "Right"),
+            ("left", "right"),
+            ("_L", "_R"),
+            ("_l", "_r"),
+            ("L_", "R_"),
+            ("l_", "r_"),
+        ]
+
+        name_to_idx = {name: i for i, name in enumerate(names)}
+
+        for i, name in enumerate(names):
+            if mapping[i] != i:
+                # Already mapped by a previous pair
+                continue
+            for left_pat, right_pat in patterns:
+                if left_pat in name:
+                    mirror_name = name.replace(left_pat, right_pat)
+                    if mirror_name in name_to_idx:
+                        j = name_to_idx[mirror_name]
+                        mapping[i] = j
+                        mapping[j] = i
+                        break
+                elif right_pat in name:
+                    mirror_name = name.replace(right_pat, left_pat)
+                    if mirror_name in name_to_idx:
+                        j = name_to_idx[mirror_name]
+                        mapping[i] = j
+                        mapping[j] = i
+                        break
+
+        return mapping
+
+    def mirror(self, joints_mapping: np.ndarray = None, mode: str = "symmetry", axis: str = "X"):
+        """
+        Mirror the animation along the specified axis.
+
+        Parameters
+        ----------
+        joints_mapping : np.ndarray, optional
+            Array where joints_mapping[i] is the index of the mirrored joint
+            for joint i. If None and mode is 'symmetry', automatically generates
+            the mapping from joint names using left/right pattern matching.
+        mode : str, optional
+            Mirroring mode: 'symmetry', 'all', or 'positions'. Default is 'symmetry'.
+        axis : str, optional
+            Axis to mirror along: 'X', 'Y', or 'Z'. Default is 'X'.
+        """
+        local_rotations, local_positions, parents, offsets, end_sites, _ = self.get_data()
+        global_translation = local_positions[:, 0, :].copy()
+
+        if joints_mapping is None and mode == "symmetry":
+            joints_mapping = self._generate_mirror_mapping()
+
+        mirrored_rotations, mirrored_translation, mirrored_offsets, mirrored_end_sites = (
+            skeleton.mirror(
+                local_rotations=local_rotations,
+                global_translation=global_translation,
+                parents=parents,
+                offsets=offsets,
+                end_sites=end_sites,
+                joints_mapping=joints_mapping,
+                mode=mode,
+                axis=axis,
+            )
+        )
+
+        mirrored_positions = local_positions.copy()
+        mirrored_positions[:, 0, :] = mirrored_translation
+
+        self.set_data(mirrored_rotations, mirrored_positions)
+
+    def copy_joint_order(self, reference_bvh):
+        """
+        Reorder joints to match the joint order of a reference BVH.
+        Both BVHs must have the same set of joint names.
+
+        Parameters
+        ----------
+        reference_bvh : BVH
+            Reference BVH whose joint order will be copied.
+        """
+        ref_names = set(reference_bvh.data["names"])
+        self_names = set(self.data["names"])
+
+        if ref_names != self_names:
+            missing_in_self = ref_names - self_names
+            extra_in_self = self_names - ref_names
+            error_msg = "The two BVH files do not have the same set of joints.\n"
+            if missing_in_self:
+                error_msg += f"  Missing in this BVH: {sorted(missing_in_self)}\n"
+            if extra_in_self:
+                error_msg += f"  Extra in this BVH (not in reference): {sorted(extra_in_self)}\n"
+            raise ValueError(error_msg)
+
+        if np.array_equal(self.data["names"], reference_bvh.data["names"]):
+            return  # Already in the same order
+
+        # Build the reorder mapping
+        order = []
+        for name in self.data["names"]:
+            ref_idx = int(np.where(reference_bvh.data["names"] == name)[0][0])
+            order.append(ref_idx)
+
+        self.set_order_joints(order)
 
     def _save_joint(self, f, data, tab, i, joint_order):
         joint_order.append(i)

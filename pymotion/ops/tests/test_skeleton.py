@@ -1,3 +1,4 @@
+import os
 import torch
 import numpy as np
 import pymotion.ops.skeleton as skeleton
@@ -212,25 +213,25 @@ class TestSkeleton:
         _, rots_dq = skeleton_torch.from_root_dual_quat(dqs_t, parents)
         assert_allclose(rots_dq.numpy(), quat.from_matrix(ground_truth_rot), atol=self.atol)
 
-    # def test_from_positions(self):
-    #     bvh = BVH()
-    #     bvh.load("test.bvh")
-    #     local_rotations, local_positions, parents, offsets, _, _ = bvh.get_data()
+    def test_from_positions(self):
+        bvh = BVH()
+        bvh.load(os.path.join(os.path.dirname(__file__), "test.bvh"))
+        local_rotations, local_positions, parents, offsets, _, _ = bvh.get_data()
 
-    #     pos, _ = fk(local_rotations, np.zeros((local_positions.shape[0], 3)), offsets, parents)
+        pos, _ = fk(local_rotations, np.zeros((local_positions.shape[0], 3)), offsets, parents)
 
-    #     pred_rots = from_root_positions(pos, parents, offsets)
-    #     pred_rots_t = from_root_positions_torch(
-    #         torch.from_numpy(pos).float(), torch.from_numpy(parents), torch.from_numpy(offsets).float()
-    #     )
+        pred_rots = from_root_positions(pos, parents, offsets)
+        pred_rots_t = from_root_positions_torch(
+            torch.from_numpy(pos).float(), torch.from_numpy(parents), torch.from_numpy(offsets).float()
+        )
 
-    #     assert_allclose(pred_rots, pred_rots_t.numpy(), atol=self.low_atol_2)
+        assert_allclose(pred_rots, pred_rots_t.numpy(), atol=self.low_atol_2)
 
-    #     bvh.set_data(pred_rots, local_positions)
+        bvh.set_data(pred_rots, local_positions)
 
-    #     pred_pos, _ = fk(pred_rots, np.zeros((local_positions.shape[0], 3)), offsets, parents)
+        pred_pos, _ = fk(pred_rots, np.zeros((local_positions.shape[0], 3)), offsets, parents)
 
-    #     assert_allclose(pos, pred_pos, atol=self.low_atol_2)
+        assert_allclose(pos, pred_pos, atol=self.low_atol_2)
 
     def test_fk(self):
         # Test with a simple chain

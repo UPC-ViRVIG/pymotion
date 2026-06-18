@@ -67,3 +67,81 @@ def interpolate_positions(
     out_positions += weights[..., None] * positions[tuple(selector)]
 
     return out_positions
+
+
+def savgol_filter(
+    x: torch.Tensor,
+    window_length: int,
+    polyorder: int,
+    dim: int = 0,
+    mode: str = "nearest",
+) -> torch.Tensor:
+    """
+    Apply a Savitzky-Golay filter to a tensor.
+
+    Parameters
+    ----------
+    x : torch.Tensor
+        The data to be filtered.
+    window_length : int
+        The length of the filter window. Must be a positive odd integer.
+    polyorder : int
+        The order of the polynomial used to fit the samples.
+        Must be less than `window_length`.
+    dim : int, optional
+        The dimension along which the filter is applied. Default is 0.
+    mode : str, optional
+        The padding mode for boundary handling. Currently only "nearest" is
+        supported, which replicates edge values. Default is "nearest".
+
+    Returns
+    -------
+    y : torch.Tensor
+        The filtered data, same shape as `x`.
+    """
+    assert mode == "nearest", "Only 'nearest' mode is supported."
+    assert window_length > 0 and window_length % 2 == 1, (
+        "window_length must be a positive odd integer."
+    )
+    assert polyorder < window_length, (
+        "polyorder must be less than window_length."
+    )
+
+    half_window = window_length // 2
+    device = x.device
+    dtype = x.dtype
+
+    # Compute Savitzky-Golay coefficients via Vandermonde matrix
+    window_pts = torch.arange(
+        -half_window, half_window + 1, dtype=torch.float64, device=device
+    )
+    A = torch.stack([window_pts**k for k in range(polyorder + 1)], dim=1)
+    coeffs = torch.linalg.pinv(A)[0]
+    coeffs = coeffs.to(dtype)
+
+    # Normalize dim to positive index
+    ndim = x.ndim
+    dim = dim % ndim
+
+    # Move target dim to the last position
+    x_moved = x.movedim(dim, -1)
+    original_shape = x_moved.shape
+    # Reshape to (batch, length) for conv1d
+    x_flat = x_moved.reshape(-1, x_moved.shape[-1])
+
+    # Pad along the last dimension with replicate mode
+    # F.pad replicate requires at least 3D input for 1D padding
+    x_3d = x_flat.unsqueeze(1)  # (batch, 1, length)
+    x_padded = torch.nn.functional.pad(
+        x_3d, (half_window, half_window), mode="replicate"
+    )
+
+    # Apply 1D convolution
+    kernel = coeffs.flip(0).reshape(1, 1, -1)  # (out_channels, in_channels, kW)
+    y_3d = torch.nn.functional.conv1d(x_padded, kernel)
+    y_flat = y_3d.squeeze(1)
+
+    # Reshape back to original shape and move dim back
+    y_moved = y_flat.reshape(original_shape)
+    y = y_moved.movedim(-1, dim)
+    return y

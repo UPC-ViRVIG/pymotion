@@ -1,4 +1,4 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Portions Copyright (c) Meta Platforms, Inc. and affiliates.
 
 import numpy as np
 
@@ -66,3 +66,61 @@ def interpolate_positions(
     out_positions += weights[..., np.newaxis] * positions[tuple(selector)]
 
     return out_positions
+
+
+def savgol_filter(
+    x: np.ndarray,
+    window_length: int,
+    polyorder: int,
+    axis: int = 0,
+    mode: str = "nearest",
+) -> np.ndarray:
+    """
+    Apply a Savitzky-Golay filter to an array.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        The data to be filtered.
+    window_length : int
+        The length of the filter window. Must be a positive odd integer.
+    polyorder : int
+        The order of the polynomial used to fit the samples.
+        Must be less than `window_length`.
+    axis : int, optional
+        The axis of the array along which the filter is applied. Default is 0.
+    mode : str, optional
+        The padding mode for boundary handling. Currently only "nearest" is
+        supported, which replicates edge values. Default is "nearest".
+
+    Returns
+    -------
+    y : np.ndarray
+        The filtered data, same shape as `x`.
+    """
+    assert mode == "nearest", "Only 'nearest' mode is supported."
+    assert window_length > 0 and window_length % 2 == 1, (
+        "window_length must be a positive odd integer."
+    )
+    assert polyorder < window_length, (
+        "polyorder must be less than window_length."
+    )
+
+    half_window = window_length // 2
+
+    # Compute Savitzky-Golay coefficients via Vandermonde matrix
+    window_pts = np.arange(-half_window, half_window + 1, dtype=np.float64)
+    A = np.column_stack([window_pts**k for k in range(polyorder + 1)])
+    coeffs = np.linalg.pinv(A)[0]
+
+    # Pad along the target axis with edge values
+    pad_width = [(0, 0)] * x.ndim
+    pad_width[axis] = (half_window, half_window)
+    x_padded = np.pad(x, pad_width, mode="edge")
+
+    # Convolve along the specified axis
+    def _convolve_1d(arr):
+        return np.convolve(arr, coeffs, mode="valid")
+
+    y = np.apply_along_axis(_convolve_1d, axis, x_padded)
+    return y
