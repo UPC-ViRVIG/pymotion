@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build]
 include = ["pymotion/*"]
-exclude = ["*test*"]
+exclude = ["*test*", "examples/*"]
 
 [project]
 name = "upc-pymotion"

@@ -35,6 +35,10 @@ pip install upc-pymotion[viewer]
 
 ## Examples
 
+The examples below are small API snippets. Larger, runnable examples live in [`examples/`](examples/); each example has its own README and optional dependencies so research-specific packages are not installed with PyMotion itself.
+
+- [`examples/bones_seed_soma/`](examples/bones_seed_soma/) loads [BONES-SEED](https://huggingface.co/datasets/bones-studio/seed) SOMA BVH files with PyMotion and runs them through [SOMA](https://github.com/NVlabs/SOMA-X).
+
 <details>
 <summary> Read and save a BVH file </summary>
 
@@ -427,14 +431,17 @@ with BlenderConnection() as conn:
     conn.render_bvh_from_path(
         path,
         np.array([0, 0, 1]),
-        end_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"],
+        no_render_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"],
     )
     # or by using a BVH object
     bvh = BVH()
     path = "test2.bvh"
     bvh.load(path)
     conn.render_bvh(
-        bvh, np.array([0, 1, 0]), end_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"]
+        bvh,
+        np.array([0, 1, 0]),
+        exclude_end_sites=True,
+        no_render_joints_pattern=["twist", "helper"],
     )
 ```
 

@@ -35,11 +35,18 @@ class BlenderAutoStarter:
                             possible_executables.append(
                                 f"C:\\Program Files\\Blender Foundation\\{dir}\\blender.exe"
                             )
-                possible_executables.append(
+                windows_apps_dir = os.path.join(
+                    os.environ.get("LOCALAPPDATA", ""),
+                    "Microsoft",
+                    "WindowsApps",
+                )
+                possible_executables.extend(
                     [
-                        "blender.exe",  # In PATH
+                        os.path.join(windows_apps_dir, "blender.exe"),
+                        os.path.join(windows_apps_dir, "blender-launcher.exe"),
                     ]
                 )
+                possible_executables.append("blender.exe")  # In PATH
             else:  # Linux/macOS
                 possible_executables.extend(
                     [
@@ -103,21 +110,27 @@ class BlenderConnection:
         >>>    conn.render_bvh_from_path(
         >>>        path,
         >>>        np.array([0, 0, 1]),
-        >>>        end_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"],
+        >>>        no_render_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"],
         >>>    )
         >>>    # or by using a BVH object
         >>>    bvh = BVH()
         >>>    path = "test2.bvh"
         >>>    bvh.load(path)
         >>>    conn.render_bvh(
-        >>>        bvh, np.array([0, 1, 0]), end_joints=["RightWrist", "LeftWrist", "RightToe", "LeftToe", "Head"]
+        >>>        bvh, np.array([0, 1, 0]), exclude_end_sites=True
         >>>    )
     """
 
-    def __init__(self, port: int = 2222, retries: int = 10, delay: float = 2.0) -> None:
+    def __init__(
+        self,
+        port: int = 2222,
+        retries: int = 10,
+        delay: float = 2.0,
+        blender_executable_path: str = None,
+    ) -> None:
         self.host = "127.0.0.1"
         self.port = port
-        self.blender_starter = BlenderAutoStarter()
+        self.blender_starter = BlenderAutoStarter(blender_executable_path)
         self.s = None
 
         try:
@@ -302,79 +315,213 @@ class BlenderConnection:
         self,
         bvh: BVH,
         color: np.ndarray = np.array([1.0, 1.0, 1.0]),
-        end_joints: list[str] = None,
+        no_render_joints: list[str] = None,
         axis_forward: str = "-Z",
         axis_up: str = "Y",
+        bvh_scale: float = 1.0,
+        exclude_end_sites: bool = False,
+        no_render_joints_pattern: Union[str, list[str]] = None,
     ):
         """
         Parameters
         ----------
             bvh : BVH
             color (Optional) : np.ndarray[3]
-            end_joints (Optional) : List[str]
+            no_render_joints (Optional) : List[str]
+                Joints whose outgoing bones should not be drawn. The joint
+                markers are still rendered.
+            exclude_end_sites (Optional) : bool
+                Whether to avoid drawing outgoing bones for BVH end-site
+                parent joints and the root joint.
+            no_render_joints_pattern (Optional) : str or list[str]
+                Joint-name substring pattern, or patterns, whose outgoing bones
+                should not be drawn.
             axis_forward (Optional) : str
                 Forward axis of the BVH file (can be "-X", "X", "-Y", "Y", "-Z", "Z")
             axis_up (Optional) : str
                 Up axis of the BVH file (can be "-X", "X", "-Y", "Y", "-Z", "Z")
+            bvh_scale (Optional) : float
+                Visual import scale passed to Blender's BVH importer.
+
+        Examples
+        --------
+            >>> import numpy as np
+            >>> from pymotion.io.bvh import BVH
+            >>> from pymotion.render.blender import BlenderConnection
+            >>> bvh = BVH()
+            >>> bvh.load("motion.bvh")
+            >>> with BlenderConnection() as conn:
+            ...     conn.render_bvh(bvh, np.array([0.2, 0.8, 1.0]))
+            ...     conn.render_bvh(bvh, np.array([1.0, 0.6, 0.2]), exclude_end_sites=True)
+            ...     conn.render_bvh(
+            ...         bvh,
+            ...         np.array([0.8, 0.8, 0.8]),
+            ...         no_render_joints=["RightWrist", "LeftWrist", "Head"],
+            ...     )
+            ...     conn.render_bvh(
+            ...         bvh,
+            ...         np.array([0.9, 0.4, 0.2]),
+            ...         no_render_joints_pattern=["twist", "helper"],
+            ...     )
         """
         if isinstance(bvh, BVH) is False:
             raise ValueError("BVH object expected")
         if color.shape != (3,):
             raise ValueError("Color must have shape [3]")
-        if end_joints is not None and not all(isinstance(joint, str) for joint in end_joints):
-            raise ValueError("End joints must be a list of strings")
+        if no_render_joints is not None and not all(
+            isinstance(joint, str) for joint in no_render_joints
+        ):
+            raise ValueError("No-render joints must be a list of strings")
         axis_candidates = ["-X", "X", "-Y", "Y", "-Z", "Z"]
         if axis_forward not in axis_candidates:
             raise ValueError("Axis forward must be one of -X, X, -Y, Y, -Z, Z")
         if axis_up not in axis_candidates:
             raise ValueError("Axis up must be one of -X, X, -Y, Y, -Z, Z")
+        if bvh_scale <= 0:
+            raise ValueError("BVH scale must be > 0")
+
+        if exclude_end_sites or no_render_joints_pattern:
+            no_render_joints = self._merge_no_render_joints(
+                no_render_joints,
+                self._get_bvh_no_render_joints(
+                    bvh,
+                    exclude_end_sites,
+                    no_render_joints_pattern,
+                ),
+            )
 
         # get a temporal path
         filename = bvh.data["filename"]
         with tempfile.NamedTemporaryFile(prefix=filename, suffix=".bvh", delete=False) as f:
             bvh.save(f.name)
-            self.render_bvh_from_path(f.name, color, end_joints, axis_forward, axis_up, delete_after=True)
+            self.render_bvh_from_path(
+                f.name,
+                color,
+                no_render_joints,
+                axis_forward,
+                axis_up,
+                delete_after=True,
+                bvh_scale=bvh_scale,
+            )
 
     def render_bvh_from_path(
         self,
         bvh_path: str,
         color: np.ndarray = np.array([1.0, 1.0, 1.0]),
-        end_joints: list[str] = None,
+        no_render_joints: list[str] = None,
         axis_forward: str = "-Z",
         axis_up: str = "Y",
         delete_after: bool = False,
+        bvh_scale: float = 1.0,
+        exclude_end_sites: bool = False,
+        no_render_joints_pattern: Union[str, list[str]] = None,
     ):
         """
         Parameters
         ----------
             bvh_path : str
             color (Optional) : np.ndarray[3]
-            end_joints (Optional) : List[str]
+            no_render_joints (Optional) : List[str]
+                Joints whose outgoing bones should not be drawn. The joint
+                markers are still rendered.
+            exclude_end_sites (Optional) : bool
+                Whether to avoid drawing outgoing bones for BVH end-site
+                parent joints and the root joint.
+            no_render_joints_pattern (Optional) : str or list[str]
+                Joint-name substring pattern, or patterns, whose outgoing bones
+                should not be drawn.
             axis_forward (Optional) : str
                 Forward axis of the BVH file (can be "-X", "X", "-Y", "Y", "-Z", "Z")
             axis_up (Optional) : str
                 Up axis of the BVH file (can be "-X", "X", "-Y", "Y", "-Z", "Z")
             delete_after (Optional) : bool
                 Whether to delete the BVH file after rendering
+            bvh_scale (Optional) : float
+                Visual import scale passed to Blender's BVH importer.
         """
 
         if isinstance(bvh_path, str) is False:
             raise ValueError("BVH path must be a string")
         if color.shape != (3,):
             raise ValueError("Color must have shape [3]")
-        if end_joints is not None and not all(isinstance(joint, str) for joint in end_joints):
-            raise ValueError("End joints must be a list of strings")
+        if no_render_joints is not None and not all(
+            isinstance(joint, str) for joint in no_render_joints
+        ):
+            raise ValueError("No-render joints must be a list of strings")
         axis_candidates = ["-X", "X", "-Y", "Y", "-Z", "Z"]
         if axis_forward not in axis_candidates:
             raise ValueError("Axis forward must be one of -X, X, -Y, Y, -Z, Z")
         if axis_up not in axis_candidates:
             raise ValueError("Axis up must be one of -X, X, -Y, Y, -Z, Z")
+        if bvh_scale <= 0:
+            raise ValueError("BVH scale must be > 0")
+
+        if exclude_end_sites or no_render_joints_pattern:
+            bvh = BVH()
+            bvh.load(bvh_path)
+            no_render_joints = self._merge_no_render_joints(
+                no_render_joints,
+                self._get_bvh_no_render_joints(
+                    bvh,
+                    exclude_end_sites,
+                    no_render_joints_pattern,
+                ),
+            )
 
         message_id = 3
         self._send_message_code(message_id)
-        bvh_path += ";".join(end_joints) if end_joints else ""
+        bvh_path += ";".join(no_render_joints) if no_render_joints else ""
         bvh_path += f";{axis_forward};{axis_up}"
-        self._send_data(bvh_path, color, np.array([1.0]) if delete_after else np.array([0.0]))
+        self._send_data(
+            bvh_path,
+            color,
+            np.array([1.0 if delete_after else 0.0, bvh_scale], dtype=np.float32),
+        )
+
+    @staticmethod
+    def _get_bvh_no_render_joints(
+        bvh: BVH,
+        exclude_end_sites: bool = False,
+        no_render_joints_pattern: Union[str, list[str]] = None,
+    ) -> list[str]:
+        no_render_joints = []
+
+        if exclude_end_sites:
+            end_site_parent_indices = list(map(int, bvh.data["end_sites_parents"])) + [0]
+            no_render_joints += [str(bvh.data["names"][idx]) for idx in end_site_parent_indices]
+
+        patterns = BlenderConnection._normalize_no_render_joints_pattern(no_render_joints_pattern)
+        if patterns:
+            no_render_joints += [
+                str(joint)
+                for joint in bvh.data["names"]
+                if any(pattern in str(joint).lower() for pattern in patterns)
+            ]
+
+        return no_render_joints
+
+    @staticmethod
+    def _normalize_no_render_joints_pattern(
+        no_render_joints_pattern: Union[str, list[str]] = None,
+    ) -> list[str]:
+        if no_render_joints_pattern is None:
+            return []
+        if isinstance(no_render_joints_pattern, str):
+            return [no_render_joints_pattern.lower()] if no_render_joints_pattern else []
+        if not all(isinstance(pattern, str) for pattern in no_render_joints_pattern):
+            raise ValueError("No-render joint patterns must be strings")
+        return [pattern.lower() for pattern in no_render_joints_pattern if pattern]
+
+    @staticmethod
+    def _merge_no_render_joints(
+        no_render_joints: list[str] = None,
+        extra_no_render_joints: list[str] = None,
+    ) -> list[str]:
+        merged = []
+        for joint in (no_render_joints or []) + (extra_no_render_joints or []):
+            if joint not in merged:
+                merged.append(joint)
+        return merged
 
     def render_checkerboard_floor(
         self,

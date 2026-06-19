@@ -456,6 +456,7 @@ def render_bvh(data, color, scale):
         color[2],
     )
     should_delete_file = scale[0] == 1
+    bvh_scale = scale[1] if len(scale) > 1 else 1.0
 
     bpy.data.scenes["Scene"].frame_end = 1
     bpy.ops.object.select_all(action="DESELECT")
@@ -463,7 +464,7 @@ def render_bvh(data, color, scale):
         filepath=bvh_path,
         filter_glob="*.bvh",
         target="ARMATURE",
-        global_scale=1.0,
+        global_scale=bvh_scale,
         frame_start=1,
         use_fps_scale=False,
         update_scene_fps=False,
