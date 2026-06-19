@@ -1,2 +1,3 @@
 pandas
+usd-core
 # Install SOMA (https://github.com/NVlabs/SOMA-X) separately following the upstream SOMA instructions.

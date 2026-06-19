@@ -91,6 +91,8 @@ class BlenderConnection:
         6: set up rendering
         7: render animation
         8: set camera
+        9: render USD
+        10: set FPS
 
     Example
     -------
@@ -553,6 +555,54 @@ class BlenderConnection:
 
         message_id = 4
         data = np.array([plane_size, checker_size, *color1, *color2])
+        self._send_message_code(message_id)
+        self._send_data(data)
+
+    def render_usd_from_path(
+        self,
+        usd_path: str,
+        color: np.ndarray = np.array([1.0, 1.0, 1.0]),
+        delete_after: bool = False,
+    ) -> None:
+        """
+        Render a USD file in Blender.
+
+        Parameters
+        ----------
+            usd_path : str
+                Path to the USD, USDA, or USDC file.
+            color (Optional) : np.ndarray[3]
+                Color assigned to imported mesh objects.
+            delete_after (Optional) : bool
+                Whether Blender should delete the USD file after rendering it.
+        """
+        if isinstance(usd_path, str) is False:
+            raise ValueError("USD path must be a string")
+        if color.shape != (3,):
+            raise ValueError("Color must have shape [3]")
+
+        message_id = 9
+        self._send_message_code(message_id)
+        self._send_data(
+            usd_path,
+            color,
+            scale=np.array([1.0 if delete_after else 0.0], dtype=np.float32),
+        )
+
+    def set_fps(self, fps: float) -> None:
+        """
+        Set the Blender scene frame rate.
+
+        Parameters
+        ----------
+            fps : float
+                Frames per second. Must be > 0.
+        """
+        if fps <= 0:
+            raise ValueError("FPS must be > 0")
+
+        message_id = 10
+        data = np.array([fps], dtype=np.float32)
         self._send_message_code(message_id)
         self._send_data(data)
 

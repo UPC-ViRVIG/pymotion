@@ -31,9 +31,7 @@ def receive_messages():
     print("[PyMotion Thread] Receive thread started.")
     while not SERVER_STATE["finish_thread"]:
         try:
-            print(
-                f"[PyMotion Thread] Server listening on {SERVER_STATE['host']}:{SERVER_STATE['port']}..."
-            )
+            print(f"[PyMotion Thread] Server listening on {SERVER_STATE['host']}:{SERVER_STATE['port']}...")
             conn, addr = SERVER_STATE["socket"].accept()
             print(f"[PyMotion Thread] Accepted connection from {addr}")
 
@@ -50,9 +48,7 @@ def receive_messages():
                 # 2. Schedule this command to be run once on the main thread
                 #    The `args` parameter passes our command tuple to the function.
                 bpy.app.timers.register(dummy_callback, first_interval=0)
-                bpy.app.timers.register(
-                    lambda cmd=command: process_single_command(cmd), first_interval=0
-                )
+                bpy.app.timers.register(lambda cmd=command: process_single_command(cmd), first_interval=0)
 
         except Exception as e:
             print(f"[PyMotion Thread] Error in accept loop: {e}")
@@ -79,9 +75,7 @@ def receive_command(conn):
 
         # --- Receive Data (if any) ---
         data, colors, scales = (None, None, None)
-        if not (
-            message_id == 0 or message_id == 7
-        ):  # clear_scene() nad other functions have no data
+        if not (message_id == 0 or message_id == 7):  # clear_scene() nad other functions have no data
             size_data_bytes = conn.recv(4)
             size_data = struct.unpack("<i", size_data_bytes)[0]
             size_color_bytes = conn.recv(4)
@@ -98,9 +92,7 @@ def receive_command(conn):
                 data_bytes = conn.recv(size_data)  # Receive string data
                 data = data_bytes.decode("utf-8")
             elif data_type_indicator == 1:  # float array
-                data_bytes = conn.recv(
-                    4 * size_data
-                )  # Receive float data (4 bytes per float)
+                data_bytes = conn.recv(4 * size_data)  # Receive float data (4 bytes per float)
                 data = []
                 for i in range(size_data):
                     data.append(struct.unpack("<f", data_bytes[i * 4 : i * 4 + 4])[0])
@@ -109,27 +101,19 @@ def receive_command(conn):
 
             # Color
             if size_color > 0:
-                color_bytes = conn.recv(
-                    4 * size_color
-                )  # Receive float data (4 bytes per float)
+                color_bytes = conn.recv(4 * size_color)  # Receive float data (4 bytes per float)
                 colors = []
                 for i in range(size_color):
-                    colors.append(
-                        struct.unpack("<f", color_bytes[i * 4 : i * 4 + 4])[0]
-                    )
+                    colors.append(struct.unpack("<f", color_bytes[i * 4 : i * 4 + 4])[0])
             else:
                 colors = None
 
             # Scale
             if size_scale > 0:
-                scales_bytes = conn.recv(
-                    4 * size_scale
-                )  # Receive float data (4 bytes per float)
+                scales_bytes = conn.recv(4 * size_scale)  # Receive float data (4 bytes per float)
                 scales = []
                 for i in range(size_scale):
-                    scales.append(
-                        struct.unpack("<f", scales_bytes[i * 4 : i * 4 + 4])[0]
-                    )
+                    scales.append(struct.unpack("<f", scales_bytes[i * 4 : i * 4 + 4])[0])
             else:
                 scales = None
 
@@ -186,6 +170,12 @@ def process_single_command(command):
                 set_camera(cam_pos, focal_len)
             except Exception as e:
                 print(f"[PyMotion Main] Error setting camera: {e}")
+        elif message_id == 9:
+            print("[PyMotion Main] Rendering USD")
+            render_usd(data, color, scale)
+        elif message_id == 10:
+            print("[PyMotion Main] Setting FPS")
+            set_fps(data)
 
         else:
             print(f"[PyMotion Main] Unknown message id {message_id}")
@@ -304,6 +294,18 @@ def set_camera(cam_pos, focal_len):
     camera_obj.data.lens = focal_len
     # Optionally print for debug
     print(f"[PyMotion Blender] Camera set: pos={cam_pos}, focal_length={focal_len}")
+
+
+def set_fps(data):
+    if data is None or len(data) < 1:
+        raise ValueError("Set FPS: Data is None or empty.")
+    fps = float(data[0])
+    if fps <= 0:
+        raise ValueError("Set FPS: FPS must be > 0.")
+
+    scene = bpy.context.scene
+    scene.render.fps = int(round(fps))
+    scene.render.fps_base = 1.0
 
 
 def render_points(data, color, scale):
@@ -447,7 +449,7 @@ def render_bvh(data, color, scale):
         raise ValueError("Invalid BVH data format.")
     bvh_path = data[0] + ".bvh"
     data = data[1].split(";")
-    end_joints = data[:-2]
+    no_render_joints = data[:-2]
     axis_forward = data[-2]
     axis_up = data[-1]
     color = (
@@ -455,8 +457,8 @@ def render_bvh(data, color, scale):
         color[1],
         color[2],
     )
-    should_delete_file = scale[0] == 1
-    bvh_scale = scale[1] if len(scale) > 1 else 1.0
+    should_delete_file = len(scale) > 0 and int(round(scale[0])) == 1
+    bvh_scale = float(scale[1]) if len(scale) > 1 else 1.0
 
     bpy.data.scenes["Scene"].frame_end = 1
     bpy.ops.object.select_all(action="DESELECT")
@@ -477,7 +479,39 @@ def render_bvh(data, color, scale):
     if should_delete_file:
         os.remove(bvh_path)
 
-    generate_rig_representation(bpy.context.active_object, color, end_joints=end_joints)
+    generate_rig_representation(
+        bpy.context.active_object,
+        color,
+        no_render_joints=no_render_joints,
+    )
+
+
+def render_usd(data, color, scale):
+    if data is None or color is None or scale is None:
+        raise ValueError("Render USD: Data, color or scale is None.")
+
+    usd_path = data
+    color = (
+        color[0],
+        color[1],
+        color[2],
+    )
+    should_delete_file = len(scale) > 0 and int(round(scale[0])) == 1
+
+    objects_before_import = set(bpy.data.objects)
+    bpy.ops.object.select_all(action="DESELECT")
+    try:
+        bpy.ops.wm.usd_import(filepath=usd_path)
+    finally:
+        if should_delete_file and os.path.exists(usd_path):
+            os.remove(usd_path)
+
+    material = get_material(color)
+    imported_objects = set(bpy.data.objects) - objects_before_import
+    for obj in imported_objects:
+        if obj.type == "MESH":
+            obj.data.materials.clear()
+            obj.data.materials.append(material)
 
 
 def render_checkerboard_floor(data):
@@ -533,7 +567,7 @@ def get_material(color_rgb, no_illumination=False):  # Function to get or create
     return material
 
 
-def generate_rig_representation(armature_obj, color, end_joints=None):
+def generate_rig_representation(armature_obj, color, no_render_joints=None):
     if armature_obj.type != "ARMATURE":
         print("[PyMotion Blender] Selected object is not an armature!")
         return
@@ -564,9 +598,7 @@ def generate_rig_representation(armature_obj, color, end_joints=None):
         distance_factor = min(1, math.exp(distance_factor) - 1)
         # TODO: ideally the distance_factor for the sphere is a mix between the previous bone and the current one
 
-        sphere_head = create_sphere_at_location(
-            head_location, base_head_radius * distance_factor, bone.name
-        )
+        sphere_head = create_sphere_at_location(head_location, base_head_radius * distance_factor, bone.name)
         sphere_head.data.materials.append(material)
         sphere_head.data = sphere_head.data.copy()
         sphere_current_collection = sphere_head.users_collection[0]
@@ -576,7 +608,7 @@ def generate_rig_representation(armature_obj, color, end_joints=None):
         sphere_current_collection.objects.unlink(sphere_head)
         setup_constraints(sphere_head, bone.name, armature_obj)
 
-        if end_joints is not None and bone.name in end_joints:
+        if no_render_joints is not None and bone.name in no_render_joints:
             continue
 
         cylinder = create_cylinder_between_points(
@@ -608,9 +640,7 @@ def create_sphere_at_location(location, radius=0.1, name="Sphere"):
     obj.select_set(True)
 
     bm = bmesh.new()
-    bmesh.ops.create_uvsphere(
-        bm, u_segments=32, v_segments=16, radius=radius, calc_uvs=True
-    )
+    bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=16, radius=radius, calc_uvs=True)
     bm.to_mesh(mesh)
     bm.free()
 
@@ -631,9 +661,7 @@ def create_cylinder_between_points(bone, p1, p2, radius=0.2, name="Cylinder"):
     obj.select_set(True)
 
     bm = bmesh.new()
-    bmesh.ops.create_cone(
-        bm, cap_ends=True, segments=5, radius1=radius, radius2=radius, depth=length
-    )
+    bmesh.ops.create_cone(bm, cap_ends=True, segments=5, radius1=radius, radius2=radius, depth=length)
     bm.to_mesh(mesh)
     bm.free()
 
@@ -654,9 +682,7 @@ def setup_constraints(obj, target_bone_name, armature_object):
     constraint.subtarget = target_bone_name
 
 
-def create_checkerboard_plane(
-    plane_size=2, checker_size=1, color1=(1, 1, 1, 1), color2=(0, 0, 0, 1)
-):
+def create_checkerboard_plane(plane_size=2, checker_size=1, color1=(1, 1, 1, 1), color2=(0, 0, 0, 1)):
     """
     Create a plane with a checkerboard pattern in Blender.
 
